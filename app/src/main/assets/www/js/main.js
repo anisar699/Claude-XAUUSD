@@ -126,6 +126,9 @@ store.on((type) => {
     else renderSettingsStatus();
   } else if (type === 'status') {
     if (active === 'settings') renderSettingsStatus();
+    // Before the first data arrives the screens show a loading / failed
+    // message, which depends on the sync status.
+    else if (!store.analysis) renderActive();
   } else if (type === 'data') {
     if (active === 'settings') renderSettingsStatus();
     else if (active === 'chart') renderActive();
