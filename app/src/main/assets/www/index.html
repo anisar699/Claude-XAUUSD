@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="dark">
+<title>XAUUSD Levels</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="hdr">
+  <div class="hdr-row">
+    <span class="sym">XAU/USD</span>
+    <span id="mkt" class="mkt"></span>
+    <span id="upd" class="upd"></span>
+  </div>
+  <div class="hdr-row hdr-price">
+    <span id="price" class="price">–</span>
+    <span id="chg" class="chg"></span>
+  </div>
+  <div id="banner" class="banner" hidden></div>
+</header>
+
+<main id="main">
+  <section id="view-overview" class="view" aria-label="Overview"></section>
+  <section id="view-levels" class="view" aria-label="Levels" hidden></section>
+  <section id="view-chart" class="view view-chart" aria-label="Chart" hidden>
+    <div id="chart-tfs" class="chips" role="tablist" aria-label="Timeframe"></div>
+    <div id="chart-layers" class="chips chips-layers" aria-label="Chart layers"></div>
+    <div class="chart-wrap">
+      <div id="chart-legend" class="chart-legend"></div>
+      <div id="chart" class="chart"></div>
+      <div id="chart-empty" class="empty" hidden>Loading candles…</div>
+    </div>
+  </section>
+  <section id="view-settings" class="view" aria-label="Settings" hidden></section>
+</main>
+
+<nav class="nav" aria-label="Sections">
+  <button data-view="overview" class="on">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-4H4zM14 4v4h6V4z"/></svg>
+    <span>Overview</span>
+  </button>
+  <button data-view="levels">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zM3 11h12v2H3zM3 16h18v2H3z"/></svg>
+    <span>Levels</span>
+  </button>
+  <button data-view="chart">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h2v3h2v10H8v5H6v-5H4V6h2zM16 2h2v6h2v8h-2v6h-2v-6h-2V8h2z"/></svg>
+    <span>Chart</span>
+  </button>
+  <button data-view="settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h9v2H4zM17 6h3v2h-3zM4 11h3v2H4zM11 11h9v2h-9zM4 16h11v2H4zM19 16h1v2h-1zM13 4h3v6h-3zM7 9h3v6H7zM15 14h3v6h-3z"/></svg>
+    <span>Settings</span>
+  </button>
+</nav>
+
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

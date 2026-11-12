@@ -1,0 +1,10 @@
+{
+  "name": "xauusd-levels",
+  "private": true,
+  "type": "module",
+  "description": "Web UI and analysis code for the XAUUSD Levels Android app",
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "dev": "node tools/dev-server.mjs"
+  }
+}
