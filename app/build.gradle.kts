@@ -13,10 +13,12 @@ android {
         applicationId = "com.xauusd.levels"
         minSdk = 26
         // 34 keeps the classic (not edge-to-edge) window layout on Android 15+,
-        // which is what the WebView UI is laid out for.
+        // which is what the WebView UI is laid out for. It also avoids the
+        // six-hours-a-day cap Android 15 puts on dataSync foreground services
+        // for apps that target 35, which would cut background alerts short.
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     signingConfigs {

@@ -4,6 +4,7 @@ import { PROVIDERS, fetchQuote } from './data/providers.js';
 import { analyse } from './core/model.js';
 import { mergeSeries, trimTo } from './core/candles.js';
 import { ANALYSIS_TFS, marketStatus } from './core/time.js';
+import { ALERT_DEFAULTS } from './core/alerts.js';
 
 const SETTINGS_KEY = 'xau.settings.v1';
 const CACHE_KEY = 'xau.cache.v1';
@@ -24,6 +25,7 @@ export const DEFAULTS = {
   chartTf: 'H1',
   chartLayers: { zones: true, areas: false, pivots: false, ema: false },
   levelsTab: 'ALL',
+  alerts: { ...ALERT_DEFAULTS },
 };
 
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -43,7 +45,12 @@ function readJson(key) {
 
 function loadSettings() {
   const s = readJson(SETTINGS_KEY) || {};
-  const out = { ...DEFAULTS, ...s, chartLayers: { ...DEFAULTS.chartLayers, ...(s.chartLayers || {}) } };
+  const out = {
+    ...DEFAULTS,
+    ...s,
+    chartLayers: { ...DEFAULTS.chartLayers, ...(s.chartLayers || {}) },
+    alerts: { ...DEFAULTS.alerts, ...(s.alerts || {}) },
+  };
   out.tfs = ANALYSIS_TFS.filter((tf) => (Array.isArray(out.tfs) ? out.tfs : DEFAULTS.tfs).includes(tf));
   if (!out.tfs.length) out.tfs = DEFAULTS.tfs.slice();
   if (!PROVIDERS[out.source]) out.source = DEFAULTS.source;
@@ -95,13 +102,14 @@ export const store = {
     return PROVIDERS[this.settings.source];
   },
 
-  // Live bid while quotes keep arriving, otherwise the last candle close.
+  // Live bid while the market is open and quotes keep arriving, otherwise the
+  // last candle close. A quote received while the market is closed is the
+  // provider's parked weekend price (wide spread), not a tradable one.
   // Freshness is judged by when the quote was received, so a wrong device
   // clock cannot make a good quote look stale.
   price() {
-    const q = this.quote;
-    if (q && nowSec() - q.at < QUOTE_FRESH_SEC) return q.bid;
-    return this.analysis ? this.analysis.lastPrice : q ? q.bid : null;
+    if (this.priceIsLive()) return this.quote.bid;
+    return this.analysis ? this.analysis.lastPrice : this.quote ? this.quote.bid : null;
   },
   priceIsLive() {
     const q = this.quote;
@@ -109,14 +117,65 @@ export const store = {
     return !!(q && t - q.at < QUOTE_FRESH_SEC && marketStatus(t).open);
   },
 
-  init() {
+  // `background: true` is the monitoring service's page. It has no window, so
+  // page visibility means nothing there and timers may be throttled: the
+  // native side calls tick() on its own clock instead.
+  init(opts = {}) {
+    this._background = !!opts.background;
+    this._settingsRaw = this._readSettingsRaw();
     this._loadCache();
     this._recompute();
     this.sync();
+    if (this._background) return;
     setInterval(() => this._tick(), 1000);
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) this._tick();
     });
+  },
+
+  tick() {
+    this._tick();
+  },
+
+  _readSettingsRaw() {
+    try {
+      return localStorage.getItem(SETTINGS_KEY) || '';
+    } catch {
+      return '';
+    }
+  },
+
+  // The app screen and the monitoring page are separate pages sharing one
+  // localStorage. This picks up settings the other one saved.
+  reloadSettings() {
+    const rawNow = this._readSettingsRaw();
+    if (rawNow === this._settingsRaw) return;
+    this._settingsRaw = rawNow;
+    const before = this.settings;
+    this.settings = loadSettings();
+    const sourceChanged =
+      this.settings.source !== before.source ||
+      (this.settings.source === 'twelvedata' && this.settings.twelveKey !== before.twelveKey);
+    if (sourceChanged) this._resetData(false);
+    else if (before.tfs.join() !== this.settings.tfs.join()) this._recompute();
+    this.emit('settings');
+  },
+
+  // Candles from different feeds are never mixed: drop everything and reload.
+  _resetData(clearSaved) {
+    this._generation++;
+    this.raw = emptyRaw();
+    this.analysis = null;
+    this.status = { ...this.status, syncing: false, fromCache: false, lastSync: 0, lastData: 0, error: null };
+    if (clearSaved) {
+      try {
+        localStorage.removeItem(CACHE_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+    this.emit('data');
+    this.sync();
   },
 
   setSettings(patch) {
@@ -127,40 +186,17 @@ export const store = {
     } catch {
       /* storage unavailable: settings last for this session only */
     }
+    this._settingsRaw = this._readSettingsRaw();
     const sourceChanged =
       this.settings.source !== before.source ||
       (this.settings.source === 'twelvedata' && this.settings.twelveKey !== before.twelveKey);
-    if (sourceChanged) {
-      // Candles from different feeds are never mixed.
-      this._generation++;
-      this.raw = emptyRaw();
-      this.analysis = null;
-      this.status = { ...this.status, syncing: false, fromCache: false, lastSync: 0, lastData: 0, error: null };
-      try {
-        localStorage.removeItem(CACHE_KEY);
-      } catch {
-        /* ignore */
-      }
-      this.emit('data');
-      this.sync();
-    } else if (patch.tfs) {
-      this._recompute();
-    }
+    if (sourceChanged) this._resetData(true);
+    else if (patch.tfs) this._recompute();
     this.emit('settings');
   },
 
   clearCache() {
-    this._generation++;
-    this.raw = emptyRaw();
-    this.analysis = null;
-    this.status = { ...this.status, syncing: false, fromCache: false, lastSync: 0, lastData: 0, error: null };
-    try {
-      localStorage.removeItem(CACHE_KEY);
-    } catch {
-      /* ignore */
-    }
-    this.emit('data');
-    this.sync();
+    this._resetData(true);
   },
 
   async testSource(source, key) {
@@ -305,13 +341,15 @@ export const store = {
   },
 
   _tick() {
-    if (!document.hidden) {
+    if (this._background || !document.hidden) {
       const t = nowSec();
       const prov = this.provider();
       const open = marketStatus(t).open;
-      // Nothing changes while the market is closed, so poll slowly.
-      const quoteEvery = open ? this.settings.quoteSec : Math.max(60, this.settings.quoteSec);
-      const m1Every = open ? prov.pollSec : 600;
+      // Nothing changes while the market is closed, so poll slowly. The
+      // background monitor also polls more gently than the open app.
+      const bg = this._background;
+      const quoteEvery = !open ? Math.max(60, this.settings.quoteSec) : bg ? Math.max(10, this.settings.quoteSec) : this.settings.quoteSec;
+      const m1Every = !open ? 600 : bg ? Math.max(60, prov.pollSec) : prov.pollSec;
       const sinceSync = t - Math.max(this.status.lastSync, this._lastSyncTry);
       const retrySoon = !this.status.lastData && sinceSync >= 30;
       if (!this.status.syncing && (sinceSync >= prov.resyncSec || retrySoon)) this.sync();

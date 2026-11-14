@@ -3,6 +3,8 @@
 import { store } from '../store.js';
 import { ANALYSIS_TFS } from '../core/time.js';
 import { PROVIDERS } from '../data/providers.js';
+import { alertDistances } from '../core/alerts.js';
+import { clearAlerts, readAlerts } from '../data/alertlog.js';
 import { clock, dateTime, esc, px } from './format.js';
 
 const TF_HINT = {
@@ -16,9 +18,78 @@ const TF_HINT = {
 };
 const QUOTE_CHOICES = [2, 5, 10, 30];
 
+// Provided by the Android shell (MainActivity). Missing in a desktop browser.
+const native = () => window.AndroidApp || null;
+const STRENGTH_CHOICES = [2, 3, 4, 5];
+const DISTANCE_CHOICES = ['auto', 1, 2, 3, 5];
+
 let root;
 let message = '';
+let lastAlertState = '';
+let lastAlertRecent = '';
 let pendingSource = null; // Twelve Data picked but no key saved yet
+
+// Monitoring state and its controls. Rebuilt only when something changed, so
+// a refresh never swaps a button out from under a finger.
+function alertStateBlock() {
+  const n = native();
+  if (!n) return '<p class="note">Background alerts work in the Android app. This is the browser preview.</p>';
+  const on = n.monitoring();
+  const allowed = n.notificationsAllowed();
+  const unrestricted = n.batteryUnrestricted();
+  let html = `<div class="kv"><span>Background monitoring</span><span>${on ? 'On' : 'Off'}</span></div>`;
+  if (on && !allowed) {
+    html += '<p class="note" style="padding-top:10px">Notifications are switched off for this app, so alerts cannot be shown.</p>';
+  }
+  html += '<div class="btns" style="padding-top:12px">';
+  html += on
+    ? '<button class="btn" data-act="mon-stop">Stop monitoring</button>'
+    : '<button class="btn" data-act="mon-start">Start background monitoring</button>';
+  if (!allowed) html += '<button class="btn" data-act="mon-notif">Notification settings</button>';
+  if (!unrestricted) html += '<button class="btn" data-act="mon-battery">Battery settings</button>';
+  html += '</div>';
+  if (!unrestricted) {
+    html += '<p class="note">Android may pause the app when the phone sits idle. For dependable alerts, set battery use for this app to Unrestricted.</p>';
+  }
+  return html;
+}
+
+function alertRecentBlock() {
+  const list = readAlerts().slice(0, 8);
+  if (!list.length) return '<div class="kv"><span>Recent alerts</span><span>none yet</span></div>';
+  return (
+    list.map((a) => `<div class="kv"><span>${dateTime(a.t)}</span><span><b>${esc(a.title)}</b><br>${esc(a.body || '')}</span></div>`).join('') +
+    '<div class="btns" style="padding-top:12px"><button class="btn" data-act="alerts-clear">Clear list</button></div>'
+  );
+}
+
+function alertsCard() {
+  const p = store.settings.alerts;
+  const a = store.analysis;
+  const auto = alertDistances({ distance: 'auto' }, a ? a.atrH1 : 0).near;
+  const chip = (attr, value, label, on) => `<button class="chip${on ? ' on' : ''}" aria-pressed="${on}" ${attr}="${value}">${label}</button>`;
+  lastAlertState = alertStateBlock();
+  lastAlertRecent = alertRecentBlock();
+  return `
+    <div class="card">
+      <div class="card-h"><h2>Alerts</h2><span>multi-timeframe areas</span></div>
+      <div id="al-state">${lastAlertState}</div>
+      <label class="opt"><input type="checkbox" data-alert="approach"${p.approach ? ' checked' : ''}>
+        <span><span class="opt-t">Near a level</span><div class="opt-d">Price comes within the distance below of an area, after being away from it.</div></span></label>
+      <label class="opt"><input type="checkbox" data-alert="breaks"${p.breaks ? ' checked' : ''}>
+        <span><span class="opt-t">Through a level</span><div class="opt-d">Price moves clean through an area to the other side. Judged on the live price, not a candle close.</div></span></label>
+      <div class="field" style="padding-top:10px">
+        <label class="lbl">Minimum strength (bars)</label>
+        <div class="seg">${STRENGTH_CHOICES.map((n) => chip('data-strength', n, `${n}+`, p.minStrength === n)).join('')}</div>
+      </div>
+      <div class="field">
+        <label class="lbl">Distance for "near"</label>
+        <div class="seg">${DISTANCE_CHOICES.map((d) => chip('data-distance', d, d === 'auto' ? `Auto ($${auto.toFixed(1)})` : `$${d}`, p.distance === d)).join('')}</div>
+      </div>
+      <div id="al-recent">${lastAlertRecent}</div>
+      <p class="note" style="padding-top:10px">Alerts pause while the market is closed or the price feed is stale. Monitoring shows a permanent notification, uses more battery, and does not restart by itself after the phone reboots.</p>
+    </div>`;
+}
 
 function statusBlock() {
   const st = store.status;
@@ -49,6 +120,7 @@ export function renderSettings() {
   const keyValue = root.querySelector('#td-key') ? root.querySelector('#td-key').value : s.twelveKey;
 
   root.innerHTML = `
+    ${alertsCard()}
     <div class="card">
       <div class="card-h"><h2>Timeframes</h2><span>zones, trend, multi-TF areas</span></div>
       ${ANALYSIS_TFS.map(
@@ -91,7 +163,7 @@ export function renderSettings() {
     </div>
 
     <div class="card">
-      <div class="card-h"><h2>About</h2><span>version 1.0.0</span></div>
+      <div class="card-h"><h2>About</h2><span>version 1.1.0</span></div>
       <p class="note">This app calculates support and resistance from price history. It does not give buy or sell signals and is not financial advice. Prices come from third-party feeds and can differ from your broker by a small amount.</p>
       <p class="note">Candles: Dukascopy (personal use) or Twelve Data. Live price: Swissquote public quotes. Charts: TradingView Lightweight Charts™ (Apache 2.0).</p>
     </div>`;
@@ -104,6 +176,18 @@ export function renderSettingsStatus() {
   if (!root || root.hidden) return;
   const el = root.querySelector('#st-status');
   if (el) el.innerHTML = statusBlock();
+  const state = alertStateBlock();
+  const stateEl = root.querySelector('#al-state');
+  if (stateEl && state !== lastAlertState) {
+    lastAlertState = state;
+    stateEl.innerHTML = state;
+  }
+  const recent = alertRecentBlock();
+  const recentEl = root.querySelector('#al-recent');
+  if (recentEl && recent !== lastAlertRecent) {
+    lastAlertRecent = recent;
+    recentEl.innerHTML = recent;
+  }
 }
 
 function setMessage(text) {
@@ -125,12 +209,22 @@ async function runTest() {
   }
 }
 
+function setAlertPrefs(patch) {
+  store.setSettings({ alerts: { ...store.settings.alerts, ...patch } });
+  renderSettings();
+}
+
 export function initSettings(el) {
   root = el;
+  // The Android shell calls this after a permission answer or a service
+  // start / stop, so the controls show the new state straight away.
+  window.__onNativeState = () => renderSettings();
 
   el.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.matches('input[data-tf]')) {
+    if (t.matches('input[data-alert]')) {
+      setAlertPrefs({ [t.dataset.alert]: t.checked });
+    } else if (t.matches('input[data-tf]')) {
       const set = new Set(store.settings.tfs);
       if (t.checked) set.add(t.dataset.tf);
       else set.delete(t.dataset.tf);
@@ -161,12 +255,27 @@ export function initSettings(el) {
   el.addEventListener('click', (e) => {
     const quote = e.target.closest('[data-quote]');
     const act = e.target.closest('[data-act]');
-    if (quote) {
+    const strength = e.target.closest('[data-strength]');
+    const distance = e.target.closest('[data-distance]');
+    if (strength) {
+      setAlertPrefs({ minStrength: Number(strength.dataset.strength) });
+    } else if (distance) {
+      const d = distance.dataset.distance;
+      setAlertPrefs({ distance: d === 'auto' ? 'auto' : Number(d) });
+    } else if (quote) {
       store.setSettings({ quoteSec: Number(quote.dataset.quote) });
       renderSettings();
     } else if (act) {
       const a = act.dataset.act;
-      if (a === 'test') runTest();
+      const n = native();
+      if (a === 'mon-start' && n) n.startMonitoring();
+      else if (a === 'mon-stop' && n) n.stopMonitoring();
+      else if (a === 'mon-notif' && n) n.openNotificationSettings();
+      else if (a === 'mon-battery' && n) n.openBatterySettings();
+      else if (a === 'alerts-clear') {
+        clearAlerts();
+        renderSettingsStatus();
+      } else if (a === 'test') runTest();
       else if (a === 'refresh') store.sync();
       else if (a === 'clear') store.clearCache();
       else if (a === 'save-key') {

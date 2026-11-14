@@ -1,24 +1,27 @@
 package com.xauusd.levels
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.content.res.AssetManager
+import android.app.NotificationManager
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.View
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
+import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
-import java.io.ByteArrayInputStream
-import java.io.IOException
 
 /**
- * A thin shell: one WebView showing the bundled web UI (assets/www).
- *
- * The UI is served from a private https origin that never touches the
- * network; its /api/proxy route is answered by [ApiProxy].
+ * A thin shell: one WebView showing the bundled web UI (assets/www), served
+ * by [AppWebClient]. Background alerts live in [MonitorService]; the page
+ * controls them through [Bridge].
  */
 class MainActivity : Activity() {
 
@@ -32,21 +35,24 @@ class MainActivity : Activity() {
         web.setBackgroundColor(Color.parseColor("#0B0E14"))
         web.overScrollMode = View.OVER_SCROLL_NEVER
         web.settings.apply {
-            javaScriptEnabled = true // only the bundled UI ever loads; see AppClient
+            javaScriptEnabled = true // only the bundled UI ever loads; see AppWebClient
             domStorageEnabled = true // settings and the candle cache live in localStorage
             allowFileAccess = false
             allowContentAccess = false
             setSupportZoom(false)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
-        web.webViewClient = AppClient(assets, web.settings.userAgentString)
+        web.webViewClient = AppWebClient(assets, web.settings.userAgentString)
+        web.addJavascriptInterface(Bridge(), "AndroidApp")
         setContentView(web)
-        web.loadUrl(START_URL)
+        web.loadUrl("${AppWebClient.ORIGIN}/index.html")
     }
 
     override fun onResume() {
         super.onResume()
         web.onResume()
+        // Permissions or battery settings may have changed while away.
+        notifyPage()
     }
 
     override fun onPause() {
@@ -67,79 +73,88 @@ class MainActivity : Activity() {
         }
     }
 
-    private class AppClient(
-        private val assets: AssetManager,
-        private val userAgent: String,
-    ) : WebViewClient() {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATIONS) {
+            // Without the permission the alerts could not be shown, so do not
+            // start; the page then offers the notification settings instead.
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) startMonitor()
+            notifyPage()
+        }
+    }
 
-        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
-            val url = request.url
-            if (url.scheme != "https" || url.host != APP_HOST) {
-                return respond(403, "text/plain", "Blocked".toByteArray())
+    private fun notificationsAllowed(): Boolean =
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).areNotificationsEnabled()
+
+    private fun startMonitor() {
+        try {
+            MonitorService.start(this)
+        } catch (e: RuntimeException) {
+            // Android can refuse a foreground-service start; the page keeps showing "Off".
+        }
+        // The service flips its running flag in onCreate, just after this returns.
+        web.postDelayed({ notifyPage() }, 600)
+    }
+
+    private fun notifyPage() {
+        web.evaluateJavascript("window.__onNativeState && window.__onNativeState()", null)
+    }
+
+    private fun open(intent: Intent, fallback: Intent? = null) {
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            if (fallback != null) try {
+                startActivity(fallback)
+            } catch (ignored: ActivityNotFoundException) {
             }
-            val path = url.path ?: "/"
-            if (path == "/api/proxy") {
-                if (!request.method.equals("GET", ignoreCase = true)) {
-                    return respond(405, "text/plain", "Method not allowed".toByteArray())
-                }
-                val r = ApiProxy.fetch(url.getQueryParameter("u"), userAgent)
-                return respond(r.status, r.contentType, r.body, noStore = true)
+        }
+    }
+
+    /** Methods the page calls as window.AndroidApp. They run on a WebView thread. */
+    private inner class Bridge {
+        @JavascriptInterface
+        fun monitoring(): Boolean = MonitorService.running
+
+        @JavascriptInterface
+        fun notificationsAllowed(): Boolean = this@MainActivity.notificationsAllowed()
+
+        @JavascriptInterface
+        fun batteryUnrestricted(): Boolean =
+            (getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
+
+        @JavascriptInterface
+        fun startMonitoring() = runOnUiThread {
+            val needsRuntimeGrant = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            when {
+                needsRuntimeGrant -> requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+                !this@MainActivity.notificationsAllowed() -> notifyPage()
+                else -> startMonitor()
             }
-            return asset(if (path == "/") "/index.html" else path)
         }
 
-        // The UI is a single page; nothing may navigate the WebView elsewhere.
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-            request.url.host != APP_HOST
-
-        private fun asset(path: String): WebResourceResponse {
-            if (path.contains("..")) return respond(400, "text/plain", "Bad path".toByteArray())
-            return try {
-                val bytes = assets.open("www$path").use { it.readBytes() }
-                respond(200, mimeOf(path), bytes)
-            } catch (e: IOException) {
-                respond(404, "text/plain", "Not found".toByteArray())
-            }
+        @JavascriptInterface
+        fun stopMonitoring() = runOnUiThread {
+            MonitorService.stop(this@MainActivity)
+            web.postDelayed({ notifyPage() }, 300)
         }
 
-        private fun mimeOf(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {
-            "html" -> "text/html"
-            "js", "mjs" -> "text/javascript"
-            "css" -> "text/css"
-            "json" -> "application/json"
-            "svg" -> "image/svg+xml"
-            "png" -> "image/png"
-            else -> "text/plain"
+        @JavascriptInterface
+        fun openNotificationSettings() = runOnUiThread {
+            open(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
         }
 
-        private fun respond(
-            status: Int,
-            contentType: String,
-            body: ByteArray,
-            noStore: Boolean = false,
-        ): WebResourceResponse {
-            // WebResourceResponse rejects 3xx codes; the proxy never follows
-            // redirects, so report one as an upstream failure.
-            val code = if (status in 300..399 || status !in 100..599) 502 else status
-            val mime = contentType.substringBefore(';').trim().ifEmpty { "text/plain" }
-            val headers = if (noStore) mapOf("Cache-Control" to "no-store") else emptyMap()
-            return WebResourceResponse(mime, "utf-8", code, reason(code), headers, ByteArrayInputStream(body))
-        }
-
-        private fun reason(code: Int): String = when (code) {
-            200 -> "OK"
-            400 -> "Bad Request"
-            403 -> "Forbidden"
-            404 -> "Not Found"
-            405 -> "Method Not Allowed"
-            502 -> "Bad Gateway"
-            else -> if (code < 400) "OK" else "Error"
+        @JavascriptInterface
+        fun openBatterySettings() = runOnUiThread {
+            open(
+                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)),
+            )
         }
     }
 
     private companion object {
-        // Reserved by Google for app-local content; it never resolves publicly.
-        const val APP_HOST = "appassets.androidplatform.net"
-        const val START_URL = "https://$APP_HOST/index.html"
+        const val REQUEST_NOTIFICATIONS = 1
     }
 }
