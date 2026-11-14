@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Chart</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #0b0e14; color: #f0efec; font: 14px system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  #bar { display: flex; gap: 6px; padding: 10px; overflow-x: auto; flex: none; }
+  #bar button { flex: none; padding: 7px 13px; border-radius: 16px; border: 1px solid rgba(255,255,255,.12); background: #131722; color: #c3c2b7; font: inherit; }
+  #bar button.on { background: #f0efec; color: #0b0e14; font-weight: 600; }
+  #info { padding: 0 12px 8px; font-size: 12px; color: #c3c2b7; font-variant-numeric: tabular-nums; min-height: 16px; flex: none; }
+  #chart { flex: 1; min-height: 0; }
+</style>
+</head>
+<body>
+<div id="bar"></div>
+<div id="info"></div>
+<div id="chart"></div>
+
+<script src="vendor/lightweight-charts.standalone.production.js"></script>
+<script src="chart.js"></script>
+<script>
+  const info = document.getElementById('info');
+  const bar = document.getElementById('bar');
+  let current = '1h';
+
+  const kit = ChartKit.init(document.getElementById('chart'), {
+    instrument: 'XAU/USD',
+    interval: current,
+    onError: (e) => { info.textContent = 'Error: ' + e.message; },
+    // Example of drawing levels: mark the highest high and lowest low of the
+    // last 100 candles. Replace this with your own support / resistance logic.
+    onBars: (bars) => {
+      const recent = bars.slice(-100);
+      kit.clearLevels();
+      kit.addLevel(Math.max(...recent.map((b) => b.high)), { title: 'R', color: '#ef5350' });
+      kit.addLevel(Math.min(...recent.map((b) => b.low)), { title: 'S', color: '#26a69a' });
+    },
+  });
+
+  // Open / high / low / close of the candle under the crosshair.
+  kit.chart.subscribeCrosshairMove((p) => {
+    const b = p && p.seriesData ? p.seriesData.get(kit.series) : null;
+    info.textContent = b ? `O ${b.open.toFixed(2)}  H ${b.high.toFixed(2)}  L ${b.low.toFixed(2)}  C ${b.close.toFixed(2)}` : '';
+  });
+
+  function renderButtons() {
+    bar.innerHTML = Object.keys(ChartKit.INTERVALS)
+      .map((k) => `<button data-iv="${k}" class="${k === current ? 'on' : ''}">${k}</button>`)
+      .join('');
+  }
+  bar.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-iv]');
+    if (!b) return;
+    current = b.dataset.iv;
+    renderButtons();
+    kit.setInterval(current);
+  });
+  renderButtons();
+</script>
+</body>
+</html>
