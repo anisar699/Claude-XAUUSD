@@ -14,7 +14,27 @@ financial advice.
   multi-timeframe areas, and daily / weekly / monthly pivot points with the
   previous period's high, low and close.
 - **Chart**: candles with the levels drawn on them.
-- **Settings**: timeframes, refresh rate, data source, data status.
+- **Settings**: alerts, timeframes, refresh rate, data source, data status.
+
+## Alerts
+
+Settings > Alerts > Start background monitoring. A notification is sent when
+price:
+
+- comes **near** a multi-timeframe area it had been away from, or
+- moves **through** an area to the other side (judged on the live price, not
+  on a candle close).
+
+You choose the minimum strength of area and the distance that counts as near.
+Nothing fires on first sight of a level, and alerts pause while the market is
+closed or the price feed is stale.
+
+Monitoring is a foreground service (`MonitorService.kt`) that runs the same
+analysis as the app in a WebView with no screen, so alerts always agree with
+the levels shown. While it is on there is a permanent notification, battery
+use is higher, and it does not restart by itself after a reboot. Android can
+still pause it when the phone sits idle for a long time; setting the app's
+battery use to Unrestricted helps.
 
 ## How levels are calculated
 
@@ -64,8 +84,8 @@ Builds are signed with the key in `keystore/` (see `keystore/README.md`).
 ## Develop
 
 The UI is plain HTML, CSS and JavaScript in `app/src/main/assets/www`, shown
-in a WebView. The Android shell (`MainActivity.kt`, `ApiProxy.kt`) serves
-those files and forwards data requests to the feeds.
+in a WebView. The Android shell (`MainActivity.kt`, `AppWebClient.kt`,
+`ApiProxy.kt`) serves those files and forwards data requests to the feeds.
 
 ```sh
 npm test                    # unit tests for the analysis code (Node 22+)
