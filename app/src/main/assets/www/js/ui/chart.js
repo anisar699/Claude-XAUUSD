@@ -4,7 +4,7 @@ import { store } from '../store.js';
 import { ema } from '../core/indicators.js';
 import { roleOf } from '../core/sr.js';
 import { nearestAreas } from '../core/confluence.js';
-import { serverOffsetSec } from '../core/time.js';
+import { bucketEnd, serverOffsetSec } from '../core/time.js';
 import { px } from './format.js';
 
 const LC = window.LightweightCharts;
@@ -41,6 +41,7 @@ let scaleHint = null; // nearest drawn level on each side of price
 let declutterQueued = false;
 let shown = null; // { tf, firstT, lastT, len }
 let lastBars = []; // chart-time bars currently loaded
+let lastCandle = null; // the newest candle, in feed time
 let hoverText = null;
 
 // Intraday candles are shown in the phone's local time. Daily and weekly
@@ -193,6 +194,7 @@ function setCandles(tf, candles) {
   }
   shown = n ? { tf, firstT: bars[0].time, lastT: bars[n - 1].time, len: n } : null;
   lastBars = bars;
+  lastCandle = candles.length ? { tf, t: candles[candles.length - 1].t } : null;
 
   const on = !!store.settings.chartLayers.ema;
   ema50Series.applyOptions({ visible: on });
@@ -286,7 +288,8 @@ export function renderChart() {
 
 // Between candle refreshes, move the last candle's close with the live quote.
 function nudgeLive() {
-  if (!chart || !lastBars.length || !store.priceIsLive()) return;
+  if (!chart || !lastBars.length || !lastCandle || !store.priceIsLive()) return;
+  if (Date.now() / 1000 >= bucketEnd(lastCandle.tf, lastCandle.t)) return; // a new candle has not arrived yet
   const last = lastBars[lastBars.length - 1];
   const p = store.price();
   candleSeries.update({ time: last.time, open: last.open, high: Math.max(last.high, p), low: Math.min(last.low, p), close: p });

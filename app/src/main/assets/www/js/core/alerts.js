@@ -14,7 +14,7 @@ const BREAK_COOLDOWN_SEC = 300;
 export const ALERT_DEFAULTS = { approach: true, breaks: true, minStrength: 3, distance: 'auto' };
 
 export function createAlertState() {
-  return { tracked: [] };
+  return { tracked: [], lastPrice: null };
 }
 
 // Distances all scale with the hourly ATR so they stay sensible as volatility
@@ -69,10 +69,15 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
     }
     used.add(entry);
     entry.price = area.price;
+    // Areas are recalculated as candles form and can shift a little. Judge
+    // the previous price against the area as it is now, so only a move of the
+    // price, not of the level, can raise an alert.
+    const last = state.lastPrice;
+    const prevSide = last == null ? side : clearSide(area, last, buffer);
 
     if (side && entry.side && side !== entry.side) {
       // Price was clearly on one side and is now clearly on the other.
-      if (p.breaks && now - entry.lastBreak >= BREAK_COOLDOWN_SEC) {
+      if (prevSide !== side && p.breaks && now - entry.lastBreak >= BREAK_COOLDOWN_SEC) {
         entry.lastBreak = now;
         out.push({ kind: 'break', direction: side === 'below' ? 'up' : 'down', area, price });
       }
@@ -83,11 +88,13 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
     }
 
     if (entry.side) {
-      const dist = Math.max(0, entry.side === 'above' ? area.lo - price : price - area.hi);
+      const gap = (x) => Math.max(0, entry.side === 'above' ? area.lo - x : x - area.hi);
+      const dist = gap(price);
       if (dist >= rearm) entry.armed = true;
       else if (dist <= near && entry.armed) {
         entry.armed = false;
-        if (p.approach && now - entry.lastApproach >= APPROACH_COOLDOWN_SEC) {
+        const priceMoved = last == null || gap(last) > near;
+        if (priceMoved && p.approach && now - entry.lastApproach >= APPROACH_COOLDOWN_SEC) {
           entry.lastApproach = now;
           out.push({ kind: 'approach', role: entry.side === 'above' ? 'resistance' : 'support', area, price, distance: dist });
         }
@@ -97,6 +104,7 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
   }
 
   state.tracked = next;
+  state.lastPrice = price;
   return out;
 }
 

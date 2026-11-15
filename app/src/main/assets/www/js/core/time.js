@@ -137,8 +137,8 @@ export function marketStatus(t) {
     else if (secOfDay < open18) nextNy = dayStart + open18;
     else nextNy = dayStart + DAY + close17;
   }
-  // Convert the New York wall-clock moment back to UTC. The offset is taken at
-  // `t`; a DST switch falls inside the weekend close, so at worst the weekend
-  // countdown is off by an hour on two weekends a year.
-  return { open, nextChange: nextNy - nyOffsetSec(t) };
+  // Convert the New York wall-clock moment back to UTC with the offset in
+  // force at that moment (a daylight-saving switch falls on a weekend).
+  const guess = nextNy - nyOffsetSec(t);
+  return { open, nextChange: nextNy - nyOffsetSec(guess) };
 }

@@ -6,17 +6,32 @@
 // 3. Group swings that sit within a tolerance (a fraction of ATR) of each
 //    other: the densest group becomes a zone, its swings are removed, repeat.
 // 4. Discount zones that price has since chopped back and forth through.
+// 5. Draw each zone as a narrow band around its centre, not across the whole
+//    spread of the swings that formed it.
+//
+// The per-timeframe settings below were chosen with tools/sr-backtest.mjs
+// (walk-forward test on two years of hourly and nine years of daily gold
+// data; README has the numbers). For M5 to H4, centring on the densest swing,
+// using 5-candle swings and favouring recent swings marked more of the later
+// turning points; on D1 and W1 the original settings did better.
 
 import { atr, median } from './indicators.js';
 
+// lookback      candles used
+// tolAtr        swings this close (x ATR) are grouped into one zone
+// kMinor        a swing must stand out from k candles on each side
+// recency       how fast older swings lose weight (share of the lookback)
+// center        'seed' = the densest swing price, 'mean' = weighted average
+// halfWidthAtr  half the drawn zone width, x ATR
+const INTRADAY = { kMinor: 5, recency: 0.3, center: 'seed', halfWidthAtr: 0.1 };
 export const SR_PARAMS = {
-  M5: { lookback: 576, tolAtr: 0.7 },
-  M15: { lookback: 480, tolAtr: 0.6 },
-  M30: { lookback: 480, tolAtr: 0.5 },
-  H1: { lookback: 480, tolAtr: 0.45 },
-  H4: { lookback: 360, tolAtr: 0.4 },
-  D1: { lookback: 300, tolAtr: 0.3 },
-  W1: { lookback: 156, tolAtr: 0.25 },
+  M5: { lookback: 576, tolAtr: 0.7, ...INTRADAY },
+  M15: { lookback: 480, tolAtr: 0.6, ...INTRADAY },
+  M30: { lookback: 480, tolAtr: 0.5, ...INTRADAY },
+  H1: { lookback: 480, tolAtr: 0.45, ...INTRADAY },
+  H4: { lookback: 360, tolAtr: 0.4, ...INTRADAY },
+  D1: { lookback: 300, tolAtr: 0.3, kMinor: 3, recency: 0.6, center: 'mean', halfWidthAtr: 0.05 },
+  W1: { lookback: 156, tolAtr: 0.25, kMinor: 3, recency: 0.6, center: 'mean', halfWidthAtr: 0.03 },
 };
 
 const K_MINOR = 3;
@@ -75,20 +90,25 @@ export function clusterByPrice(points, tol, maxClusters = 50) {
     }
     // Clamp: the weighted mean can land a rounding error outside [lo, hi].
     const price = Math.min(hi, Math.max(lo, pSum / wSum));
-    clusters.push({ price, lo, hi, score: wSum, members });
+    // `seed` is the densest point the cluster was grown from.
+    clusters.push({ price, seed: best.price, lo, hi, score: wSum, members });
   }
   return clusters;
 }
 
-function reactionWeight(c, s, k, atrValue) {
+// How far price moved away from a swing over the next 2k candles, in ATR.
+function reactionMove(c, s, k, atrValue) {
   const end = Math.min(c.length - 1, s.i + 2 * k);
   let move = 0;
   for (let j = s.i + 1; j <= end; j++) {
     const d = s.kind === 'H' ? s.price - c[j].l : c[j].h - s.price;
     if (d > move) move = d;
   }
-  const r = Math.min(3, Math.max(0.5, move / atrValue));
-  return Math.sqrt(r);
+  return move / atrValue;
+}
+
+function reactionWeight(move) {
+  return Math.sqrt(Math.min(3, Math.max(0.5, move)));
 }
 
 function countCrossings(c, fromIndex, price, band) {
@@ -105,39 +125,69 @@ function countCrossings(c, fromIndex, price, band) {
   return crossings;
 }
 
-export function computeZones(candles, tf) {
+// Settings shared by every timeframe. `options` in computeZones() overrides
+// any of these or of SR_PARAMS, so tools/sr-backtest.mjs can compare variants
+// with the same code the app runs.
+export const ZONE_DEFAULTS = {
+  tolScale: 1, // multiplies tolAtr
+  width: 'core', // 'core' = centre +- halfWidthAtr, 'range' = full spread of the swings
+  maxZones: MAX_ZONES,
+  minRatio: MIN_RATIO,
+  minMove: 0, // drop swings that price did not turn away from by this much (ATR)
+  crossPenalty: 0.3, // score divisor per extra close back and forth through the zone
+  flipBonus: 1.2, // score multiplier when the zone was both support and resistance
+};
+
+// The engine as it was in version 1.1, for comparison.
+export const ZONES_V1 = { kMinor: K_MINOR, recency: 0.6, center: 'mean', width: 'range' };
+
+export function computeZones(candles, tf, options) {
   const p = SR_PARAMS[tf] || SR_PARAMS.H1;
+  const o = { ...ZONE_DEFAULTS, ...p, ...options };
   if (!candles || candles.length < 40) return [];
   const c = candles.slice(Math.max(0, candles.length - p.lookback));
   const n = c.length;
   const atrSeries = atr(c, 14);
   const atrValue = median(atrSeries.slice(-60));
   if (!atrValue) return [];
-  const tol = p.tolAtr * atrValue;
+  const tol = p.tolAtr * o.tolScale * atrValue;
 
   const major = new Set(findSwings(c, K_MAJOR).map((s) => s.kind + s.i));
-  const points = findSwings(c, K_MINOR).map((s) => {
+  const points = [];
+  for (const s of findSwings(c, o.kMinor)) {
+    const move = reactionMove(c, s, o.kMinor, atrValue);
+    if (move < o.minMove) continue;
     const isMajor = major.has(s.kind + s.i);
-    const recency = Math.exp(-(n - 1 - s.i) / (n * 0.6));
-    const w = (isMajor ? MAJOR_WEIGHT : 1) * recency * reactionWeight(c, s, K_MINOR, atrValue);
-    return { ...s, major: isMajor, w };
-  });
+    const recency = Math.exp(-(n - 1 - s.i) / (n * o.recency));
+    const w = (isMajor ? MAJOR_WEIGHT : 1) * recency * reactionWeight(move);
+    points.push({ ...s, major: isMajor, w });
+  }
   if (!points.length) return [];
 
-  const zones = clusterByPrice(points, tol, MAX_ZONES * 2).map((cl) => {
+  const zones = clusterByPrice(points, tol, o.maxZones * 2).map((cl) => {
+    const centre = o.center === 'seed' ? cl.seed : cl.price;
+    let lo = cl.lo;
+    let hi = cl.hi;
+    if (o.width === 'core') {
+      // A narrow band around the centre instead of the full spread of the
+      // member swings; never wider than that spread allows.
+      const half = o.halfWidthAtr * atrValue;
+      lo = Math.max(cl.lo, centre - half);
+      hi = Math.min(cl.hi, centre + half);
+    }
     const highs = cl.members.filter((m) => m.kind === 'H').length;
     const lows = cl.members.length - highs;
     const firstI = Math.min(...cl.members.map((m) => m.i));
     const lastT = Math.max(...cl.members.map((m) => m.t));
-    const crossings = countCrossings(c, firstI, cl.price, tol / 2);
+    const crossings = countCrossings(c, firstI, centre, tol / 2);
     let score = cl.score;
-    if (highs && lows) score *= 1.2;
-    score /= 1 + 0.3 * Math.max(0, crossings - 1);
+    if (highs && lows) score *= o.flipBonus;
+    score /= 1 + o.crossPenalty * Math.max(0, crossings - 1);
     return {
       tf,
-      price: cl.price,
-      lo: cl.lo,
-      hi: cl.hi,
+      price: centre,
+      lo,
+      hi,
       touches: cl.members.length,
       highs,
       lows,
@@ -151,9 +201,9 @@ export function computeZones(candles, tf) {
   const max = Math.max(...zones.map((z) => z.score));
   return zones
     .map((z) => ({ ...z, ratio: z.score / max, strength: strengthOf(z.score / max) }))
-    .filter((z) => z.ratio >= MIN_RATIO)
+    .filter((z) => z.ratio >= o.minRatio)
     .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_ZONES)
+    .slice(0, o.maxZones)
     .sort((a, b) => b.price - a.price);
 }
 

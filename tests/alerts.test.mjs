@@ -107,3 +107,28 @@ test('several areas can alert in the same pass', () => {
   const more = run(s, 20, 4002.4, areas);
   assert.deepEqual(more.map((h) => `${h.kind}:${h.area.price}`).sort(), ['approach:4004.5', 'break:4000']);
 });
+
+test('a level that is recalculated across price is not a break', () => {
+  const s = createAlertState();
+  run(s, 0, 3990, [area(4000)]);
+  // Price does not move; the area is recalculated 2.5 lower, which puts the
+  // price on its other side. Nothing may fire.
+  assert.deepEqual(run(s, 400, 3990, [area(3987.5)]), []);
+  assert.equal(s.tracked[0].side, 'below', 'the new side is remembered');
+  // Price itself then goes back through the moved area: that is a break.
+  const hit = run(s, 800, 3985, [area(3987.5)]);
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].kind, 'break');
+  assert.equal(hit[0].direction, 'down');
+});
+
+test('a level that is recalculated closer to price is not an approach', () => {
+  const s = createAlertState();
+  run(s, 0, 3980, [area(4000)]); // armed: 19 below the area
+  assert.deepEqual(run(s, 10, 3980, [area(3982.5)]), [], 'the level came to the price');
+  // It is disarmed, so a small move by price does not fire either...
+  assert.deepEqual(run(s, 20, 3980.5, [area(3982.5)]), []);
+  // ...until price backs off and comes again.
+  run(s, 30, 3975, [area(3982.5)]);
+  assert.equal(run(s, 700, 3980.5, [area(3982.5)]).length, 1);
+});

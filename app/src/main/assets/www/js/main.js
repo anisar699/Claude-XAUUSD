@@ -2,7 +2,7 @@
 
 import { store } from './store.js';
 import { marketStatus } from './core/time.js';
-import { clock, dateTime, duration, esc, px, signed } from './ui/format.js';
+import { clock, dateTime, dayTime, duration, esc, px, signed } from './ui/format.js';
 import { renderOverview } from './ui/overview.js';
 import { initLevels, renderLevels, showLevels } from './ui/levels.js';
 import { initChart, onChartQuote, renderChart } from './ui/chart.js';
@@ -58,11 +58,11 @@ function renderHeader() {
   const m = marketStatus(now);
   const mkt = $('mkt');
   mkt.className = 'mkt' + (m.open ? ' open' : '');
-  mkt.innerHTML = `<i></i>${m.open ? 'Market open' : `Closed · opens in ${duration(m.nextChange - now)}`}`;
+  mkt.innerHTML = `<i></i>${m.open ? 'Market open' : `Closed · opens ${duration(m.nextChange - now)}`}`;
 
   const upd = $('upd');
   if (store.priceIsLive()) upd.textContent = `Live · ${clock(store.quote.at)}`;
-  else if (a) upd.textContent = `Last · ${dateTime(a.lastT)}`;
+  else if (a) upd.textContent = `Last · ${dayTime(a.lastT)}`;
   else upd.textContent = '';
 }
 

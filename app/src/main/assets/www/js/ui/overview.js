@@ -77,5 +77,6 @@ export function renderOverview(el) {
       <div class="card-h"><h2>Session</h2><span>New York close days</span></div>
       ${sessionTiles(a, price)}
     </div>
-    <p class="note">Tags show where a level comes from: a timeframe's swing zone, a pivot (D/W/M), a previous high or low (PDH, PWL…), or a round number. Levels are calculated from price history and are not trade signals.</p>`;
+    <p class="note">Tags show where a level comes from: a timeframe's swing zone, a pivot (D/W/M), a previous high or low (PDH, PWL…), or a round number.</p>
+    <p class="note">Strength bars show how much price history backs a level: how many swings and timeframes, and how recent. In testing on past data they did not tell which levels price would turn at, so treat every level as a place to watch, not a trade signal.</p>`;
 }

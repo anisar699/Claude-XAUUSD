@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { bucketEnd, bucketOf, marketStatus, nyOffsetSec, utcDayRepresentative } from '../app/src/main/assets/www/js/core/time.js';
 import { aggregateTf, extendWith, mergeSeries, stitchDays, utcDaysToServerDays } from '../app/src/main/assets/www/js/core/candles.js';
 import { atr, ema, rsi, trendOf } from '../app/src/main/assets/www/js/core/indicators.js';
-import { clusterByPrice, computeZones, distanceTo, findSwings, roleOf } from '../app/src/main/assets/www/js/core/sr.js';
+import { clusterByPrice, computeZones, distanceTo, findSwings, roleOf, SR_PARAMS, ZONES_V1 } from '../app/src/main/assets/www/js/core/sr.js';
 import { classicPivots, keyLevels, splitCurrent } from '../app/src/main/assets/www/js/core/pivots.js';
 import { buildLevelPool, confluence, nearestAreas } from '../app/src/main/assets/www/js/core/confluence.js';
 import { analyse, buildSeries } from '../app/src/main/assets/www/js/core/model.js';
@@ -72,6 +72,10 @@ test('market hours', () => {
   assert.equal(marketStatus(utc(2026, 10, 15, 22, 30)).open, false);
   const thu = marketStatus(utc(2026, 10, 12, 7, 21));
   assert.equal(thu.nextChange, utc(2026, 10, 12, 22));
+  // Weekends when the clocks change: the Sunday open is 18:00 New York time
+  // in the new offset.
+  assert.equal(marketStatus(utc(2026, 2, 7, 12)).nextChange, utc(2026, 2, 8, 22), 'March: opens 22:00 UTC (EDT)');
+  assert.equal(marketStatus(utc(2026, 9, 31, 12)).nextChange, utc(2026, 10, 1, 23), 'November: opens 23:00 UTC (EST)');
 });
 
 // ---- candles ---------------------------------------------------------------
@@ -94,6 +98,18 @@ test('extendWith builds the in-progress candle from finer candles', () => {
   assert.equal(out[1].c, 11.5);
   assert.deepEqual([out[2].t, out[2].o, out[2].h, out[2].l, out[2].c], [900, 11.5, 14, 11.2, 13.9]);
   assert.equal(m5[1].h, 12, 'input not mutated');
+});
+
+test('extendWith does not build candles across a gap in the finer data', () => {
+  const h1 = [candle(utc(2026, 10, 10, 5), 1, 2, 0.5, 1.5)];
+  // Minute candles that start two days after the hourly series ends.
+  const m1 = [candle(utc(2026, 10, 12, 7, 30), 3, 3.5, 2.5, 3), candle(utc(2026, 10, 12, 7, 31), 3, 3.2, 2.9, 3.1)];
+  assert.deepEqual(extendWith(h1, m1, 'H1'), h1);
+  // Contiguous minute candles do extend it.
+  const next = [candle(utc(2026, 10, 10, 6), 1.5, 1.6, 1.4, 1.55)];
+  const out = extendWith(h1, next, 'H1');
+  assert.equal(out.length, 2);
+  assert.equal(out[1].t, utc(2026, 10, 10, 6));
 });
 
 test('mergeSeries prefers the newer copy', () => {
@@ -178,6 +194,27 @@ test('findSwings marks each turning point once', () => {
   assert.ok(lows.every((s) => Math.abs(s.price - 99.8) < 1e-9));
 });
 
+test('zones are drawn as narrow bands around their centre', () => {
+  // Swing highs spread over 1.2 around 110.6: one zone, centred on the
+  // densest point, drawn no wider than 2 x halfWidthAtr x ATR.
+  const c = [];
+  let t = 0;
+  for (let k = 0; k < 40; k++) {
+    const top = 110 + (k % 4) * 0.4; // 110, 110.4, 110.8, 111.2
+    for (let j = 0; j < 12; j++) {
+      const x = j < 6 ? j / 6 : (12 - j) / 6;
+      const mid = 100 + (top - 100) * x;
+      c.push(candle(t++ * 3600, mid, mid + 0.2, mid - 0.2, mid));
+    }
+  }
+  const atrNow = atr(c, 14).at(-1);
+  const wide = computeZones(c, 'H1', ZONES_V1).find((z) => z.price > 105);
+  const narrow = computeZones(c, 'H1').find((z) => z.price > 105);
+  assert.ok(wide.hi - wide.lo > 0.8, `old zone spans the swings (${(wide.hi - wide.lo).toFixed(2)})`);
+  assert.ok(narrow.hi - narrow.lo <= 2 * SR_PARAMS.H1.halfWidthAtr * atrNow + 1e-9, `new zone is narrow (${(narrow.hi - narrow.lo).toFixed(2)})`);
+  assert.ok(narrow.lo <= narrow.price && narrow.price <= narrow.hi);
+});
+
 test('computeZones finds the range edges', () => {
   const zones = computeZones(zigzag(300, 100, 110, 10), 'H1');
   assert.equal(zones.length, 2);
@@ -237,6 +274,8 @@ test('confluence merges levels from several sources', () => {
   assert.ok(pool.some((p) => p.tag === 'PDH' && p.price === 4010));
   const conf = confluence(pool, 4);
   assert.ok(conf.every((z, i) => i === 0 || conf[i - 1].price > z.price), 'sorted high to low');
+  const narrow = confluence(pool, 4, 0.5);
+  assert.ok(narrow.every((z) => z.hi - z.lo <= 1 + 1e-9 && z.lo <= z.price && z.price <= z.hi), 'areas narrowed to +-0.5');
   const top = conf.find((z) => Math.abs(z.price - 4000.5) < 2);
   assert.ok(top);
   for (const tag of ['H4', 'D1', '4000', 'D-R1']) assert.ok(top.tags.includes(tag), tag);

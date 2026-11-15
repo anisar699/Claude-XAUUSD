@@ -80,7 +80,7 @@ function allCard(a, price) {
       ${near.below.map((z) => areaRow(z, price, 'support')).join('') || '<div class="row-none">No support below price in the loaded history.</div>'}
     </div>
   </div>
-  <p class="note">An area groups levels from different sources that sit within ${px(a.tol)} of each other. More sources and higher timeframes give more bars.</p>`;
+  <p class="note">An area groups levels from different sources that sit within ${px(a.tol)} of each other, drawn as a narrow band around their centre. More sources and higher timeframes give more bars; bars measure how much history backs a level, not how likely price is to turn there.</p>`;
 }
 
 function pivotCard(a, price) {

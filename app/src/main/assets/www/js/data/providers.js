@@ -76,7 +76,6 @@ export function twelveUrl(tf, limit, key) {
     interval: TWELVE_INTERVAL[tf],
     outputsize: String(Math.min(5000, limit)),
     timezone: 'UTC',
-    order: 'ASC',
     apikey: key,
   });
   return 'https://api.twelvedata.com/time_series?' + q.toString();
@@ -115,10 +114,11 @@ export const PROVIDERS = {
     name: 'Twelve Data',
     perRequest: 1000,
     // One larger request instead of paging, and slow polling, to stay inside
-    // the free plan's 8 requests a minute and 800 a day.
+    // the free plan's 8 requests a minute and 800 a day: about 380 a trading
+    // day per page, so the open app and the background monitor fit together.
     single: { H1: 3000, D1: 2000 },
-    pollSec: 120,
-    resyncSec: 7200,
+    pollSec: 240,
+    resyncSec: 14400,
     parallel: 1,
     async candles(tf, limit, _beforeSec, key) {
       if (!key) throw new Error('Twelve Data API key is missing');

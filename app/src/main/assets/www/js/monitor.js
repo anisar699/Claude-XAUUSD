@@ -18,7 +18,8 @@ const state = createAlertState();
 const nowSec = () => Math.floor(Date.now() / 1000);
 const px = (v) => v.toFixed(2);
 
-const STALE_CANDLES_SEC = 300;
+// Newest one-minute candle older than this (seconds) = data not updating.
+const STALE_CANDLES_SEC = 420;
 let lastStatus = '';
 
 function setStatus(text) {
@@ -45,7 +46,7 @@ function evaluate() {
   // than judge levels against old numbers.
   if (!marketStatus(t).open) return setStatus(`Market closed · last ${px(a.lastPrice)} · alerts paused`);
   if (!store.priceIsLive()) return setStatus('No live price · alerts paused');
-  if (t - store.status.lastData > STALE_CANDLES_SEC) return setStatus('Candles not updating · alerts paused');
+  if (t - a.lastT > STALE_CANDLES_SEC) return setStatus('Candles not updating · alerts paused');
 
   const price = store.price();
   const alerts = evaluateAlerts(state, { now: t, price, areas: a.conf, tol: a.tol, atrH1: a.atrH1, prefs: store.settings.alerts });

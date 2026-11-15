@@ -48,7 +48,9 @@ export function buildLevelPool({ zonesByTf, key, price, span }) {
   return pool;
 }
 
-export function confluence(pool, tol) {
+// halfWidth: draw each area as its centre +- this much (never wider than the
+// spread of its levels). Leave it out to span all of them.
+export function confluence(pool, tol, halfWidth) {
   if (!pool.length) return [];
   const clusters = clusterByPrice(pool, tol, 60);
   const max = Math.max(...clusters.map((c) => c.score));
@@ -59,10 +61,11 @@ export function confluence(pool, tol) {
         if (!tags.includes(m.tag)) tags.push(m.tag);
       }
       const ratio = c.score / max;
+      const narrow = halfWidth > 0;
       return {
         price: c.price,
-        lo: c.lo,
-        hi: c.hi,
+        lo: narrow ? Math.max(c.lo, c.price - halfWidth) : c.lo,
+        hi: narrow ? Math.min(c.hi, c.price + halfWidth) : c.hi,
         score: c.score,
         ratio,
         strength: strengthOf(ratio),

@@ -42,15 +42,51 @@ battery use to Unrestricted helps.
   of ATR of each other. A zone scores higher for more touches, more recent
   touches, sharper reversals, and having acted as both support and
   resistance; it scores lower when price has chopped through it repeatedly.
+  Each zone is drawn as a narrow band (centre +- 0.1 ATR on M5 to H4, less on
+  D1 and W1), centred on the densest swing price on M5 to H4.
 - **Pivots**: classic floor pivots (PP, R1 to R3, S1 to S3).
 - **Multi-timeframe areas**: zones from every enabled timeframe, pivots,
   previous highs and lows, and round numbers are pooled; levels at nearly the
-  same price form one area, weighted towards higher timeframes.
+  same price form one area, weighted towards higher timeframes, drawn as its
+  centre +- 0.1 hourly ATR.
 - **Candles**: H4, D1, W1 and monthly candles are built from hourly data on
   New York close (17:00 New York) boundaries, the convention most MT4/MT5
   brokers use, so they should match a broker chart closely.
 
 The code is in `app/src/main/assets/www/js/core/`.
+
+### How well the levels work
+
+`tools/sr-backtest.mjs` tests the zones walk-forward: at each test point the
+engine sees only past candles, and its zones are scored on the next 6 hours
+(M5) to 6 weeks (W1). The scores are compared with random lines of the same
+count and width, and settings were chosen on the first 60% of the history and
+checked on the last 40%.
+
+Version 1.2 against 1.1, on the checked part (points above random lines):
+
+| | M5 | M15 | H1 | H4 |
+|---|---|---|---|---|
+| Zone width, x ATR (1.1 → 1.2) | 0.71 → 0.13 | 0.57 → 0.12 | 0.39 → 0.11 | 0.27 → 0.08 |
+| Turned at the zone, when reached | -1 → +3 | -1 → +2 | +4 → +4 | +1 → +2 |
+| Turning points marked beforehand | +3 → +6 | +4 → +5 | +6 → +7 | +6 → +6 |
+
+D1 and W1 kept their settings (the new ones did worse there) and are only
+drawn narrower. What the test also shows:
+
+- Levels mark where price turns somewhat better than random lines, but price
+  reaching a level turns there only a few points more often than at a random
+  line. Treat levels as places to watch, not as signals.
+- The strength bars measure how much history backs a level. They did not
+  predict which levels price turned at, and neither did touches, age or
+  distance from price.
+
+```sh
+NODE_USE_ENV_PROXY=1 node tools/sr-backtest.mjs --fetch data   # history from Dukascopy
+node tools/sr-backtest.mjs data            # zones per timeframe, 1.1 vs current
+node tools/sr-backtest.mjs data areas      # multi-timeframe areas
+node tools/sr-backtest.mjs data strength   # strength bars vs outcome
+```
 
 ## Data sources
 

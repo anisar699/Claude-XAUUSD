@@ -21,6 +21,12 @@ export function dateTime(t) {
   return `${d.getDate()} ${mon} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
+// Short form for the header: weekday and time.
+export function dayTime(t) {
+  const d = new Date(t * 1000);
+  return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()]} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
 export function ago(t, now) {
   const s = Math.max(0, now - t);
   if (s < 90) return 'just now';

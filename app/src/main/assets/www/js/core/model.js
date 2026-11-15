@@ -31,7 +31,12 @@ function lastClose(series) {
   return null;
 }
 
-export function analyse(raw, { now, tfs }) {
+// AREA_HALF_WIDTH_ATR: multi-timeframe areas are drawn as their centre +- this
+// share of the hourly ATR. zoneOptions / areaHalfWidthAtr exist for the
+// walk-forward tests.
+export const AREA_HALF_WIDTH_ATR = 0.1;
+
+export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HALF_WIDTH_ATR }) {
   const series = buildSeries(raw);
   const last = lastClose(series);
   if (!last) return null;
@@ -39,7 +44,7 @@ export function analyse(raw, { now, tfs }) {
   const zones = {};
   const trend = {};
   for (const tf of tfs) {
-    zones[tf] = computeZones(series[tf], tf);
+    zones[tf] = computeZones(series[tf], tf, zoneOptions);
     trend[tf] = trendOf(series[tf]);
   }
 
@@ -49,7 +54,8 @@ export function analyse(raw, { now, tfs }) {
   const price = last.price;
   const tol = Math.max(0.35 * (atrH1 || 0), price * 0.0004);
   const span = Math.max(2.5 * (atrD1 || 0), 100);
-  const conf = confluence(buildLevelPool({ zonesByTf: zones, key, price, span }), tol);
+  const halfWidth = areaHalfWidthAtr && atrH1 ? areaHalfWidthAtr * atrH1 : 0;
+  const conf = confluence(buildLevelPool({ zonesByTf: zones, key, price, span }), tol, halfWidth);
 
   const day = key.D.current
     ? { open: key.D.current.o, high: key.D.current.h, low: key.D.current.l }

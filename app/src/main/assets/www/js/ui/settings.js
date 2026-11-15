@@ -79,7 +79,7 @@ function alertsCard() {
       <label class="opt"><input type="checkbox" data-alert="breaks"${p.breaks ? ' checked' : ''}>
         <span><span class="opt-t">Through a level</span><div class="opt-d">Price moves clean through an area to the other side. Judged on the live price, not a candle close.</div></span></label>
       <div class="field" style="padding-top:10px">
-        <label class="lbl">Minimum strength (bars)</label>
+        <label class="lbl">Minimum strength (bars: how much history backs the level)</label>
         <div class="seg">${STRENGTH_CHOICES.map((n) => chip('data-strength', n, `${n}+`, p.minStrength === n)).join('')}</div>
       </div>
       <div class="field">
@@ -163,7 +163,7 @@ export function renderSettings() {
     </div>
 
     <div class="card">
-      <div class="card-h"><h2>About</h2><span>version 1.1.0</span></div>
+      <div class="card-h"><h2>About</h2><span>version 1.2.0</span></div>
       <p class="note">This app calculates support and resistance from price history. It does not give buy or sell signals and is not financial advice. Prices come from third-party feeds and can differ from your broker by a small amount.</p>
       <p class="note">Candles: Dukascopy (personal use) or Twelve Data. Live price: Swissquote public quotes. Charts: TradingView Lightweight Charts™ (Apache 2.0).</p>
     </div>`;

@@ -1,7 +1,7 @@
 // Candle series helpers. A candle is {t, o, h, l, c, v} with t in UTC epoch
 // seconds; every series is sorted ascending by t.
 
-import { bucketOf, utcDayRepresentative } from './time.js';
+import { bucketEnd, bucketOf, utcDayRepresentative } from './time.js';
 
 export function aggregate(candles, bucketFn) {
   const out = [];
@@ -49,6 +49,11 @@ export function mergeSeries(a, b) {
 export function extendWith(series, finer, tf) {
   if (!finer || !finer.length) return series ? series.slice() : [];
   if (!series || !series.length) return aggregateTf(finer, tf);
+  // The finer candles must reach back to the end of the series. If they start
+  // later (for example an old saved series next to fresh minute candles),
+  // the candles in between are unknown and new ones built here would have the
+  // wrong open, high and low.
+  if (finer[0].t > bucketEnd(tf, series[series.length - 1].t)) return series.slice();
   const out = series.slice(0, -1);
   const last = { ...series[series.length - 1] };
   out.push(last);
