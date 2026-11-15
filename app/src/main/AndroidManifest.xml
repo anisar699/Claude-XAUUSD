@@ -34,6 +34,10 @@
             android:name=".MonitorService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name=".MonitorAlarmReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>

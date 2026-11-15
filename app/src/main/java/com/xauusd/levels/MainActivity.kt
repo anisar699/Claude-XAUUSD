@@ -42,8 +42,10 @@ class MainActivity : Activity() {
             setSupportZoom(false)
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         }
-        web.webViewClient = AppWebClient(assets, web.settings.userAgentString)
+        // If the renderer dies, rebuild the screen instead of crashing.
+        web.webViewClient = AppWebClient(assets, web.settings.userAgentString) { recreate() }
         web.addJavascriptInterface(Bridge(), "AndroidApp")
+        MonitorService.createChannels(this)
         setContentView(web)
         web.loadUrl("${AppWebClient.ORIGIN}/index.html")
     }
@@ -118,6 +120,24 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun notificationsAllowed(): Boolean = this@MainActivity.notificationsAllowed()
+
+        /** The "Level alerts" channel can be switched off on its own in Android settings. */
+        @JavascriptInterface
+        fun alertChannelEnabled(): Boolean {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channel = nm.getNotificationChannel(MonitorService.CHANNEL_ALERTS) ?: return true
+            return channel.importance != NotificationManager.IMPORTANCE_NONE
+        }
+
+        @JavascriptInterface
+        fun openAlertChannelSettings() = runOnUiThread {
+            open(
+                Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    .putExtra(Settings.EXTRA_CHANNEL_ID, MonitorService.CHANNEL_ALERTS),
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
+            )
+        }
 
         @JavascriptInterface
         fun batteryUnrestricted(): Boolean =

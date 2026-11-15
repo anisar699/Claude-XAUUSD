@@ -53,7 +53,8 @@ object ApiProxy {
 
             val status = conn.responseCode
             val stream: InputStream? = if (status in 200..299) conn.inputStream else conn.errorStream
-            val body = stream?.use { readCapped(it) } ?: ByteArray(0)
+            val body = (if (stream == null) ByteArray(0) else stream.use { readCapped(it) })
+                ?: return error(502, "Response too large")
             Result(status, conn.contentType ?: "text/plain", body)
         } catch (e: Exception) {
             error(502, e.message ?: e.javaClass.simpleName)
@@ -62,15 +63,16 @@ object ApiProxy {
         }
     }
 
-    private fun readCapped(input: InputStream): ByteArray {
+    /** The whole stream, or null if it is longer than [max] bytes. */
+    internal fun readCapped(input: InputStream, max: Int = MAX_BYTES): ByteArray? {
         val out = ByteArrayOutputStream()
         val buf = ByteArray(16 * 1024)
-        while (out.size() < MAX_BYTES) {
+        while (true) {
             val n = input.read(buf)
-            if (n < 0) break
+            if (n < 0) return out.toByteArray()
             out.write(buf, 0, n)
+            if (out.size() > max) return null
         }
-        return out.toByteArray()
     }
 
     private fun error(status: Int, message: String) =

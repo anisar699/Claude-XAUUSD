@@ -26,15 +26,37 @@ price:
   on a candle close).
 
 You choose the minimum strength of area and the distance that counts as near.
-Nothing fires on first sight of a level, and alerts pause while the market is
-closed or the price feed is stale.
+Nothing fires on first sight of a level, and only a move of the price (not a
+level being recalculated) can raise an alert. Alerts pause while the market is
+closed, while the live price is not live (see below), and while any candle
+feed has a problem or a timeframe is out of date. An alert that follows such a
+pause says so.
 
 Monitoring is a foreground service (`MonitorService.kt`) that runs the same
 analysis as the app in a WebView with no screen, so alerts always agree with
-the levels shown. While it is on there is a permanent notification, battery
-use is higher, and it does not restart by itself after a reboot. Android can
-still pause it when the phone sits idle for a long time; setting the app's
-battery use to Unrestricted helps.
+the levels shown. While it is on there is a permanent notification. It keeps
+the phone awake only while the market is open; while it is closed the phone
+can sleep and an alarm wakes monitoring at the reopening (Android may deliver
+it a few minutes late). It does not restart by itself after a reboot, and
+Android can still pause it when the phone sits idle for a long time; setting
+the app's battery use to Unrestricted helps. Settings warns when notifications,
+or just the "Level alerts" category, are switched off.
+
+### When data counts as current
+
+- **Live price**: received in the last 90 seconds (measured on a clock that
+  changing the phone's time does not affect), its own timestamp moved in the
+  last 2 minutes and is within 10 minutes of the phone's clock, and the market
+  is open. Otherwise the app shows the last candle close.
+- **Candles**: each feed is tracked on its own. A failed or empty answer is an
+  error for that feed, shown until it recovers, and retried after 30 s,
+  doubling to at most 5 minutes. A timeframe whose candles stop before the
+  newest candle's period is marked out of date.
+- Malformed candles and quotes (duplicate times, impossible highs and lows,
+  crossed prices, missing timestamps) are dropped before use, including from
+  saved data.
+- Twelve Data requests from the app and the monitor share one budget (7 a
+  minute, 780 a day) so the free plan is not exceeded.
 
 ## How levels are calculated
 

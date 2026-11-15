@@ -46,7 +46,12 @@ export function mergeSeries(a, b) {
 // Extend a timeframe series with finer candles that are at or after its last
 // bucket. This is how the in-progress candle gets built: the feed returns
 // completed candles, the finer series fills in the rest.
-export function extendWith(series, finer, tf) {
+//
+// The series' last candle may carry `asOf`: the time it was fetched. A finer
+// candle in the same bucket only moves its close when it ends after that
+// moment; without `asOf` the candle counts as complete. Highs and lows are
+// always merged (any traded price inside the bucket is real).
+export function extendWith(series, finer, tf, finerSec = 60) {
   if (!finer || !finer.length) return series ? series.slice() : [];
   if (!series || !series.length) return aggregateTf(finer, tf);
   // The finer candles must reach back to the end of the series. If they start
@@ -57,6 +62,7 @@ export function extendWith(series, finer, tf) {
   const out = series.slice(0, -1);
   const last = { ...series[series.length - 1] };
   out.push(last);
+  const knownTo = last.asOf != null ? last.asOf : bucketEnd(tf, last.t);
   let cur = last;
   for (const f of finer) {
     const b = bucketOf(tf, f.t);
@@ -64,7 +70,7 @@ export function extendWith(series, finer, tf) {
     if (b === cur.t) {
       if (f.h > cur.h) cur.h = f.h;
       if (f.l < cur.l) cur.l = f.l;
-      cur.c = f.c;
+      if (cur !== last || f.t + finerSec > knownTo) cur.c = f.c;
     } else if (b > cur.t) {
       cur = { t: b, o: f.o, h: f.h, l: f.l, c: f.c, v: f.v || 0 };
       out.push(cur);

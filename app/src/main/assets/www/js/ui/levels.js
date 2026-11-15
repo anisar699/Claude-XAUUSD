@@ -6,17 +6,28 @@ import { distanceTo, roleOf } from '../core/sr.js';
 import { ago, biasCell, meter, px, roleBadge, signed, tagChips } from './format.js';
 import { priceRow } from './overview.js';
 
-function tabs() {
+// The tab strip is built once and then only updated in place, so a focused
+// tab keeps focus (keyboard, TalkBack) while prices refresh the list below.
+let stripTfs = '';
+
+function tabList() {
+  return [['ALL', 'Multi-TF'], ...store.settings.tfs.map((tf) => [tf, tf]), ['PIV', 'Pivots']];
+}
+
+function syncStrip(strip) {
   const cur = currentTab();
-  const chip = (id, label) =>
-    `<button class="chip${cur === id ? ' on' : ''}" role="tab" aria-selected="${cur === id}" data-tab="${id}">${label}</button>`;
-  return (
-    '<div class="chips" role="tablist" aria-label="Level source">' +
-    chip('ALL', 'Multi-TF') +
-    store.settings.tfs.map((tf) => chip(tf, tf)).join('') +
-    chip('PIV', 'Pivots') +
-    '</div>'
-  );
+  const tfs = store.settings.tfs.join();
+  if (tfs !== stripTfs || !strip.children.length) {
+    stripTfs = tfs;
+    strip.innerHTML = tabList()
+      .map(([id, label]) => `<button class="chip" role="tab" data-tab="${id}">${label}</button>`)
+      .join('');
+  }
+  for (const b of strip.children) {
+    const on = b.dataset.tab === cur;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  }
 }
 
 function currentTab() {
@@ -110,16 +121,22 @@ export function renderLevels(el) {
   const a = store.analysis;
   if (!a) {
     el.innerHTML = `<div class="card"><div class="empty">${store.status.syncing ? 'Loading market data…' : 'No data yet.'}</div></div>`;
+    stripTfs = '';
     return;
   }
   const price = store.price();
   const tab = currentTab();
   const body = tab === 'ALL' ? allCard(a, price) : tab === 'PIV' ? pivotCard(a, price) : tfCard(a, tab, price);
-  // Keep the chip strip's horizontal scroll position across re-renders.
-  const strip = el.querySelector('.chips');
-  const left = strip ? strip.scrollLeft : 0;
-  el.innerHTML = tabs() + body;
-  if (left) el.querySelector('.chips').scrollLeft = left;
+  let strip = el.querySelector(':scope > .chips');
+  let list = el.querySelector(':scope > .lv-body');
+  if (!strip || !list) {
+    el.innerHTML = '<div class="chips" role="tablist" aria-label="Level source"></div><div class="lv-body"></div>';
+    strip = el.firstElementChild;
+    list = el.lastElementChild;
+    stripTfs = '';
+  }
+  syncStrip(strip);
+  list.innerHTML = body;
   if (centerNext) focusPrice(el);
 }
 

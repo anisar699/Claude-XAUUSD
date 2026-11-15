@@ -42,6 +42,7 @@ let declutterQueued = false;
 let shown = null; // { tf, firstT, lastT, len }
 let lastBars = []; // chart-time bars currently loaded
 let lastCandle = null; // the newest candle, in feed time
+let liveBar = null; // the newest candle as drawn, including live-quote extremes
 let hoverText = null;
 
 // Intraday candles are shown in the phone's local time. Daily and weekly
@@ -153,7 +154,7 @@ function ohlcText(b) {
 function renderLegend() {
   const el = root.querySelector('#chart-legend');
   const tf = store.settings.chartTf;
-  const last = lastBars[lastBars.length - 1];
+  const last = liveBar || lastBars[lastBars.length - 1];
   const ohlc = hoverText || (last ? ohlcText(last) : '');
   let extra = '';
   const t = store.analysis && store.analysis.trend[tf];
@@ -180,13 +181,29 @@ function renderChips() {
   ).join('');
 }
 
+const sameBar = (a, b) => a.time === b.time && a.open === b.open && a.high === b.high && a.low === b.low && a.close === b.close;
+
 function setCandles(tf, candles) {
   const bars = toBars(tf, candles);
   const n = bars.length;
-  const same =
+  const sameShape =
     shown && shown.tf === tf && n >= shown.len && shown.len > 0 && bars[0].time === shown.firstT && bars[shown.len - 1].time === shown.lastT;
-  if (same) {
-    for (let i = shown.len - 1; i < n; i++) candleSeries.update(bars[i]);
+  if (sameShape) {
+    // The feed can correct older candles; redraw from the first one that changed.
+    let from = shown.len - 1;
+    for (let i = 0; i < shown.len - 1; i++) {
+      if (!sameBar(bars[i], lastBars[i])) {
+        from = i;
+        break;
+      }
+    }
+    if (from < shown.len - 1) {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      candleSeries.setData(bars);
+      if (range) chart.timeScale().setVisibleLogicalRange(range);
+    } else {
+      for (let i = from; i < n; i++) candleSeries.update(bars[i]);
+    }
   } else {
     const tfChanged = !shown || shown.tf !== tf;
     candleSeries.setData(bars);
@@ -195,6 +212,16 @@ function setCandles(tf, candles) {
   shown = n ? { tf, firstT: bars[0].time, lastT: bars[n - 1].time, len: n } : null;
   lastBars = bars;
   lastCandle = candles.length ? { tf, t: candles[candles.length - 1].t } : null;
+
+  // The candle on screen keeps every high and low seen from live quotes during
+  // its period, even when a feed update arrives without them.
+  const lastBar = bars[n - 1];
+  if (lastBar && liveBar && liveBar.tf === tf && liveBar.time === lastBar.time) {
+    liveBar = { ...lastBar, tf, high: Math.max(lastBar.high, liveBar.high), low: Math.min(lastBar.low, liveBar.low) };
+    if (liveBar.high !== lastBar.high || liveBar.low !== lastBar.low) candleSeries.update(barOf(liveBar));
+  } else {
+    liveBar = lastBar ? { ...lastBar, tf } : null;
+  }
 
   const on = !!store.settings.chartLayers.ema;
   ema50Series.applyOptions({ visible: on });
@@ -206,6 +233,8 @@ function setCandles(tf, candles) {
     ema200Series.setData(line(ema(closes, 200)));
   }
 }
+
+const barOf = (b) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
 
 function desiredLines(a, tf, price) {
   const L = store.settings.chartLayers;
@@ -288,11 +317,11 @@ export function renderChart() {
 
 // Between candle refreshes, move the last candle's close with the live quote.
 function nudgeLive() {
-  if (!chart || !lastBars.length || !lastCandle || !store.priceIsLive()) return;
+  if (!chart || !liveBar || !lastCandle || !store.priceIsLive()) return;
   if (Date.now() / 1000 >= bucketEnd(lastCandle.tf, lastCandle.t)) return; // a new candle has not arrived yet
-  const last = lastBars[lastBars.length - 1];
   const p = store.price();
-  candleSeries.update({ time: last.time, open: last.open, high: Math.max(last.high, p), low: Math.min(last.low, p), close: p });
+  liveBar = { ...liveBar, high: Math.max(liveBar.high, p), low: Math.min(liveBar.low, p), close: p };
+  candleSeries.update(barOf(liveBar));
 }
 
 export function onChartQuote() {
@@ -300,6 +329,7 @@ export function onChartQuote() {
   const a = store.analysis;
   if (a) syncLines(a, store.settings.chartTf, store.price());
   nudgeLive();
+  renderLegend();
 }
 
 export function initChart(el) {
@@ -318,4 +348,11 @@ export function initChart(el) {
       renderChart();
     }
   });
+}
+
+// For tests: the candles as the chart library holds them, newest last.
+export function __debug() {
+  if (!candleSeries) return null;
+  const bars = candleSeries.data();
+  return { ...bars[bars.length - 1], bars };
 }

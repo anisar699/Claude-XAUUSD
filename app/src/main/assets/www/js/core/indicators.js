@@ -29,12 +29,14 @@ export function rsi(closes, period = 14) {
   }
   gain /= period;
   loss /= period;
-  out[period] = loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+  // No movement at all reads as neutral (50), not as overbought.
+  const value = () => (gain === 0 && loss === 0 ? 50 : loss === 0 ? 100 : 100 - 100 / (1 + gain / loss));
+  out[period] = value();
   for (let i = period + 1; i < closes.length; i++) {
     const d = closes[i] - closes[i - 1];
     gain = (gain * (period - 1) + (d > 0 ? d : 0)) / period;
     loss = (loss * (period - 1) + (d < 0 ? -d : 0)) / period;
-    out[i] = loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
+    out[i] = value();
   }
   return out;
 }

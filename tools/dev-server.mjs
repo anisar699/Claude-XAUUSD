@@ -50,7 +50,8 @@ async function proxy(target, res) {
       signal: AbortSignal.timeout(20000),
     });
     const body = Buffer.from(await r.arrayBuffer());
-    res.writeHead(r.status, { 'Content-Type': r.headers.get('content-type') || 'text/plain', 'Cache-Control': 'no-store' });
+    // Same as AppWebClient.kt: feed answers are always served as plain text.
+    res.writeHead(r.status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     res.end(body);
   } catch (e) {
     res.writeHead(502, { 'Content-Type': 'text/plain' }).end(String(e.message || e));

@@ -132,3 +132,19 @@ test('a level that is recalculated closer to price is not an approach', () => {
   run(s, 30, 3975, [area(3982.5)]);
   assert.equal(run(s, 700, 3980.5, [area(3982.5)]).length, 1);
 });
+
+test('an alert after a long pause says so (audit R05)', () => {
+  const s = createAlertState();
+  run(s, 0, 3980, [area(4000)]);
+  const hit = run(s, 86400, 4005, [area(4000)]);
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].since, 0);
+  assert.match(describeAlert(hit[0]).body, /moved while alerts were paused/);
+  // A normal, continuous check carries no such note.
+  const s2 = createAlertState();
+  run(s2, 0, 3980, [area(4000)]);
+  run(s2, 10, 3990, [area(4000)]);
+  const live = run(s2, 20, 4005, [area(4000)]);
+  assert.equal(live[0].since, null);
+  assert.doesNotMatch(describeAlert(live[0]).body, /paused/);
+});

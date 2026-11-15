@@ -1,6 +1,7 @@
 package com.xauusd.levels
 
 import android.annotation.SuppressLint
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -43,8 +44,9 @@ class MonitorService : Service() {
     }
 
     // The CPU has to stay awake for the checks to keep running with the screen
-    // off. It is held only while monitoring is on and released in onDestroy.
-    @SuppressLint("SetJavaScriptEnabled", "WakelockTimeout")
+    // off, but only while the market is open: the page reports the market
+    // state (Bridge.marketState) and while it is closed the lock is released
+    // and an alarm wakes the phone at the reopening.
     override fun onCreate() {
         super.onCreate()
         createChannels(this)
@@ -62,23 +64,60 @@ class MonitorService : Service() {
             return
         }
         running = true
-
-        wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "xauusd:monitor")
-            .also { it.acquire() }
-
-        web = WebView(this).apply {
-            settings.javaScriptEnabled = true // only the bundled page ever loads; see AppWebClient
-            settings.domStorageEnabled = true // settings and the candle cache are shared with the app
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-            // Not on screen, so tell WebView its renderer still matters.
-            setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
-            webViewClient = AppWebClient(assets, settings.userAgentString)
-            addJavascriptInterface(Bridge(), "AndroidMonitor")
-            loadUrl("${AppWebClient.ORIGIN}/monitor.html")
-        }
+        instance = this
+        holdWake(true) // until the page reports the market state
+        web = newWebView()
         handler.postDelayed(tick, TICK_MS)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun newWebView(): WebView = WebView(this).apply {
+        settings.javaScriptEnabled = true // only the bundled page ever loads; see AppWebClient
+        settings.domStorageEnabled = true // settings and the candle cache are shared with the app
+        settings.allowFileAccess = false
+        settings.allowContentAccess = false
+        // Not on screen, so tell WebView its renderer still matters.
+        setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
+        webViewClient = AppWebClient(assets, settings.userAgentString) { dead -> rendererGone(dead) }
+        addJavascriptInterface(Bridge(), "AndroidMonitor")
+        loadUrl("${AppWebClient.ORIGIN}/monitor.html")
+    }
+
+    // The renderer crashed or was killed for memory: start a fresh page.
+    private fun rendererGone(dead: WebView) {
+        handler.post {
+            if (!running || web !== dead) return@post
+            dead.destroy()
+            web = newWebView()
+        }
+    }
+
+    // Long-lived by design while the market is open; released when it closes
+    // and in onDestroy.
+    @SuppressLint("WakelockTimeout", "Wakelock")
+    private fun holdWake(on: Boolean) {
+        val lock = wakeLock ?: (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "xauusd:monitor")
+            .also { wakeLock = it }
+        if (on && !lock.isHeld) lock.acquire()
+        if (!on && lock.isHeld) lock.release()
+    }
+
+    private fun alarmIntent(): PendingIntent = PendingIntent.getBroadcast(
+        this, 2,
+        Intent(this, MonitorAlarmReceiver::class.java),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    private fun alarms() = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+    /** The market opened (or a wake-up alarm fired): keep the CPU awake and check now. */
+    internal fun wake() {
+        handler.post {
+            if (!running) return@post
+            holdWake(true)
+            web?.evaluateJavascript("window.__monitorTick && window.__monitorTick()", null)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -92,7 +131,9 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         running = false
+        if (instance === this) instance = null
         handler.removeCallbacks(tick)
+        alarms().cancel(alarmIntent())
         web?.destroy()
         web = null
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -104,6 +145,26 @@ class MonitorService : Service() {
 
     /** Called from the page's JavaScript thread; work is posted to the main thread. */
     private inner class Bridge {
+        /**
+         * open: the market is open now. nextChangeMs: when that changes (epoch ms).
+         * While closed, let the phone sleep and set an alarm for the reopening;
+         * Android may deliver it a few minutes late when the phone is idle.
+         */
+        @JavascriptInterface
+        fun marketState(open: Boolean, nextChangeMs: Double) {
+            handler.post {
+                if (!running) return@post
+                if (open) {
+                    alarms().cancel(alarmIntent())
+                    holdWake(true)
+                } else {
+                    val at = nextChangeMs.toLong().coerceAtLeast(System.currentTimeMillis() + 60_000)
+                    alarms().setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmIntent())
+                    holdWake(false)
+                }
+            }
+        }
+
         @JavascriptInterface
         fun status(text: String) {
             handler.post {
@@ -162,7 +223,7 @@ class MonitorService : Service() {
     companion object {
         private const val ACTION_STOP = "com.xauusd.levels.STOP_MONITOR"
         private const val CHANNEL_MONITOR = "monitor"
-        private const val CHANNEL_ALERTS = "alerts"
+        const val CHANNEL_ALERTS = "alerts"
         private const val ONGOING_ID = 1
         private const val ALERT_ID = 2
         private const val TICK_MS = 5_000L
@@ -170,6 +231,12 @@ class MonitorService : Service() {
         /** True while the service is alive in this process. */
         @Volatile
         var running = false
+            private set
+
+        // The running service, for the wake-up alarm. Cleared in onDestroy.
+        @SuppressLint("StaticFieldLeak")
+        @Volatile
+        internal var instance: MonitorService? = null
             private set
 
         fun start(context: Context) {

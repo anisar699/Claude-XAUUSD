@@ -10,11 +10,14 @@
 
 const APPROACH_COOLDOWN_SEC = 600;
 const BREAK_COOLDOWN_SEC = 300;
+// Longer than this since the previous check (market closed, feed down, phone
+// asleep) and an alert says so: the move happened while nobody was watching.
+const GAP_SEC = 600;
 
 export const ALERT_DEFAULTS = { approach: true, breaks: true, minStrength: 3, distance: 'auto' };
 
 export function createAlertState() {
-  return { tracked: [], lastPrice: null };
+  return { tracked: [], lastPrice: null, lastAt: null };
 }
 
 // Distances all scale with the hourly ATR so they stay sensible as volatility
@@ -43,6 +46,7 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
   const out = [];
   const next = [];
   const used = new Set();
+  const since = state.lastAt != null && now - state.lastAt > GAP_SEC ? state.lastAt : null;
 
   for (const area of areas) {
     if (area.strength < p.minStrength) continue;
@@ -79,7 +83,7 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
       // Price was clearly on one side and is now clearly on the other.
       if (prevSide !== side && p.breaks && now - entry.lastBreak >= BREAK_COOLDOWN_SEC) {
         entry.lastBreak = now;
-        out.push({ kind: 'break', direction: side === 'below' ? 'up' : 'down', area, price });
+        out.push({ kind: 'break', direction: side === 'below' ? 'up' : 'down', area, price, since });
       }
       entry.side = side;
       entry.armed = false;
@@ -96,7 +100,7 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
         const priceMoved = last == null || gap(last) > near;
         if (priceMoved && p.approach && now - entry.lastApproach >= APPROACH_COOLDOWN_SEC) {
           entry.lastApproach = now;
-          out.push({ kind: 'approach', role: entry.side === 'above' ? 'resistance' : 'support', area, price, distance: dist });
+          out.push({ kind: 'approach', role: entry.side === 'above' ? 'resistance' : 'support', area, price, distance: dist, since });
         }
       }
     }
@@ -105,10 +109,18 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
 
   state.tracked = next;
   state.lastPrice = price;
+  state.lastAt = now;
   return out;
 }
 
 const f2 = (x) => x.toFixed(2);
+const two = (n) => String(n).padStart(2, '0');
+
+function gapNote(a) {
+  if (a.since == null) return '';
+  const d = new Date(a.since * 1000);
+  return ` · moved while alerts were paused (last check ${two(d.getHours())}:${two(d.getMinutes())})`;
+}
 
 // Notification text for one alert.
 export function describeAlert(a) {
@@ -119,13 +131,13 @@ export function describeAlert(a) {
     return {
       key: `approach:${a.role}:${Math.round(a.area.price)}`,
       title: `Near ${a.role} ${f2(a.area.price)}`,
-      body: `Price ${f2(a.price)} · ${where} · ${tags} · ${strength}`,
+      body: `Price ${f2(a.price)} · ${where} · ${tags} · ${strength}${gapNote(a)}`,
     };
   }
   const up = a.direction === 'up';
   return {
     key: `break:${a.direction}:${Math.round(a.area.price)}`,
     title: `Price ${up ? 'above' : 'below'} ${f2(a.area.price)}`,
-    body: `Price ${f2(a.price)} · moved through ${up ? 'resistance' : 'support'} · ${tags} · ${strength}`,
+    body: `Price ${f2(a.price)} · moved through ${up ? 'resistance' : 'support'} · ${tags} · ${strength}${gapNote(a)}`,
   };
 }

@@ -20,6 +20,13 @@ class ApiProxyTest {
         assertEquals(403, ApiProxy.fetch("file:///etc/hosts", ua).status)
     }
 
+    @Test
+    fun oversizedAnswerIsRejectedNotCut() {
+        val max = 1000
+        assertEquals(max, ApiProxy.readCapped(java.io.ByteArrayInputStream(ByteArray(max)), max)?.size)
+        assertEquals(null, ApiProxy.readCapped(java.io.ByteArrayInputStream(ByteArray(max + 1)), max))
+    }
+
     // Talks to the real feeds, so it only runs on request: LIVE_TESTS=1 ./gradlew test
     @Test
     fun liveFeedsAnswer() {

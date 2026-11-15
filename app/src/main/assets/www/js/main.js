@@ -75,7 +75,10 @@ function renderBanner() {
     else html = 'Loading market data…';
   } else if (st.error) {
     const since = st.lastData ? clock(st.lastData) : st.cacheSavedAt ? dateTime(st.cacheSavedAt) : 'earlier';
-    html = `<b>Update failed.</b> Showing data from ${since}. ${esc(st.error)}`;
+    const more = st.errors.length > 1 ? ` (+${st.errors.length - 1} more in Settings)` : '';
+    html = `<b>Update failed.</b> Showing data from ${since}. ${esc(st.error)}${more}`;
+  } else if (store.analysis.stale.length) {
+    html = `<b>${esc(store.analysis.stale.join(', '))} out of date.</b> Levels on those timeframes use older candles until their feed updates.`;
   } else if (st.fromCache) {
     html = `Showing saved data from ${dateTime(st.cacheSavedAt)} while the latest loads…`;
   }

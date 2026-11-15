@@ -29,11 +29,25 @@ export async function fetchText(url) {
   }
 }
 
-function clean(rows) {
-  return rows
-    .filter((c) => Number.isFinite(c.t) && [c.o, c.h, c.l, c.c].every((x) => Number.isFinite(x) && x > 0))
-    .sort((a, b) => a.t - b.t);
+const MIN_T = 946684800; // 2000-01-01
+const MAX_T = 4102444800; // 2100-01-01
+
+// Keep only well-formed candles: whole-second times in a sane range, finite
+// positive prices, high above and low below the open and close. A later row
+// with the same time replaces an earlier one. Sorted by time.
+export function cleanCandles(rows) {
+  const byTime = new Map();
+  for (const c of rows) {
+    if (!c || !Number.isInteger(c.t) || c.t < MIN_T || c.t > MAX_T) continue;
+    if (![c.o, c.h, c.l, c.c].every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0)) continue;
+    const eps = 1e-6 * c.h;
+    if (c.h + eps < Math.max(c.o, c.c) || c.l - eps > Math.min(c.o, c.c) || c.h < c.l) continue;
+    byTime.set(c.t, c);
+  }
+  return [...byTime.values()].sort((a, b) => a.t - b.t);
 }
+
+const clean = cleanCandles;
 
 // ---- Dukascopy (default; real spot XAU/USD bid candles, no key) -------------
 
@@ -95,6 +109,52 @@ export function parseTwelve(text) {
   );
 }
 
+const TWELVE_BUDGET_KEY = 'xau.twelve.budget.v1';
+const TWELVE_PER_MINUTE = 7; // free plan: 8 a minute; one spare for Test connection
+const TWELVE_PER_DAY = 780; // free plan: 800 a day
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function readBudget() {
+  try {
+    const b = JSON.parse(localStorage.getItem(TWELVE_BUDGET_KEY) || 'null');
+    if (b && Array.isArray(b.recent) && typeof b.day === 'string' && Number.isFinite(b.count)) return b;
+  } catch {
+    /* fall through */
+  }
+  return { recent: [], day: '', count: 0 };
+}
+
+// Wait for a free slot in the shared per-minute budget and count the request
+// against the daily one. Without storage it cannot coordinate and just goes.
+export async function takeTwelveSlot(now = () => Date.now(), wait = sleep) {
+  for (let tries = 0; tries < 10; tries++) {
+    const t = now();
+    let b;
+    try {
+      b = readBudget();
+    } catch {
+      return;
+    }
+    const today = new Date(t).toISOString().slice(0, 10);
+    if (b.day !== today) b = { recent: [], day: today, count: 0 };
+    b.recent = b.recent.filter((x) => t - x < 60000);
+    if (b.count >= TWELVE_PER_DAY) throw new Error('Twelve Data daily limit reached; it resets at 00:00 UTC');
+    if (b.recent.length < TWELVE_PER_MINUTE) {
+      b.recent.push(t);
+      b.count++;
+      try {
+        localStorage.setItem(TWELVE_BUDGET_KEY, JSON.stringify(b));
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    await wait(Math.max(1000, 60000 - (t - Math.min(...b.recent)) + 100));
+  }
+  throw new Error('Twelve Data rate limit: try again in a minute');
+}
+
 export const PROVIDERS = {
   dukascopy: {
     id: 'dukascopy',
@@ -122,6 +182,7 @@ export const PROVIDERS = {
     parallel: 1,
     async candles(tf, limit, _beforeSec, key) {
       if (!key) throw new Error('Twelve Data API key is missing');
+      await takeTwelveSlot();
       return parseTwelve(await fetchText(twelveUrl(tf, limit, key)));
     },
   },
@@ -134,10 +195,16 @@ export function parseSwissquote(text) {
   if (!Array.isArray(arr) || !arr.length) throw new Error('Unexpected quote response');
   let best = null;
   for (const entry of arr) {
-    const profiles = entry.spreadProfilePrices || [];
-    const p = profiles.find((x) => x.spreadProfile === 'prime') || profiles[0];
-    if (!p || !(p.bid > 0) || !(p.ask > 0)) continue;
-    if (!best || entry.ts > best.ts) best = { bid: p.bid, ask: p.ask, ts: entry.ts };
+    const profiles = (entry && entry.spreadProfilePrices) || [];
+    const p = profiles.find((x) => x && x.spreadProfile === 'prime') || profiles[0];
+    if (!p) continue;
+    const bid = Number(p.bid);
+    const ask = Number(p.ask);
+    const ts = Number(entry.ts);
+    // Finite prices, not crossed, a spread under 2% and a real timestamp.
+    if (!(Number.isFinite(bid) && Number.isFinite(ask) && bid > 0 && ask >= bid && ask - bid < bid * 0.02)) continue;
+    if (!(Number.isFinite(ts) && ts / 1000 > MIN_T && ts / 1000 < MAX_T)) continue;
+    if (!best || ts > best.ts) best = { bid, ask, ts };
   }
   if (!best) throw new Error('Unexpected quote response');
   return { bid: best.bid, ask: best.ask, t: Math.round(best.ts / 1000) };

@@ -57,6 +57,19 @@ test('monthly bucket is stable across a daylight saving switch', () => {
   assert.equal(bucketOf('MN', utc(2026, 10, 30, 22, 0)), utc(2026, 10, 30, 22));
 });
 
+test('bucketEnd follows the server clock across daylight saving', () => {
+  // The week of 1 Nov 2026 starts on summer time and ends on winter time.
+  const week = bucketOf('W1', utc(2026, 9, 28, 12));
+  assert.equal(bucketEnd('W1', week), bucketOf('W1', utc(2026, 10, 3, 12)));
+  assert.equal(bucketEnd('W1', week) - week, 7 * 86400 + 3600);
+  const friday = bucketOf('D1', utc(2026, 9, 30, 12));
+  assert.equal(bucketEnd('D1', friday) - friday, 86400, 'an ordinary day is 24 h');
+  const monday = bucketOf('D1', utc(2026, 10, 2, 12)); // first day on winter time
+  assert.equal(monday, utc(2026, 10, 1, 22));
+  assert.equal(bucketEnd('D1', monday), utc(2026, 10, 2, 22));
+  assert.equal(bucketEnd('H4', bucketOf('H4', utc(2026, 10, 12, 7))), bucketOf('H4', utc(2026, 10, 12, 11)));
+});
+
 test('market hours', () => {
   assert.equal(marketStatus(utc(2026, 10, 12, 7, 21)).open, true);
   const sat = marketStatus(utc(2026, 10, 14, 12));
@@ -89,7 +102,8 @@ test('aggregate M1 into M5', () => {
 });
 
 test('extendWith builds the in-progress candle from finer candles', () => {
-  const m5 = [candle(300, 10, 11, 9, 10), candle(600, 10, 12, 9.5, 11)];
+  // The 600 candle was fetched while still forming, at 840.
+  const m5 = [candle(300, 10, 11, 9, 10), { ...candle(600, 10, 12, 9.5, 11), asOf: 840 }];
   const m1 = [candle(540, 9, 9, 9, 9), candle(840, 11, 13, 11, 11.5), candle(900, 11.5, 11.8, 11.2, 11.6), candle(960, 11.6, 14, 11.6, 13.9)];
   const out = extendWith(m5, m1, 'M5');
   assert.equal(out.length, 3);
@@ -98,6 +112,19 @@ test('extendWith builds the in-progress candle from finer candles', () => {
   assert.equal(out[1].c, 11.5);
   assert.deepEqual([out[2].t, out[2].o, out[2].h, out[2].l, out[2].c], [900, 11.5, 14, 11.2, 13.9]);
   assert.equal(m5[1].h, 12, 'input not mutated');
+});
+
+test('a stale minute candle cannot move a newer coarse close (audit F07)', () => {
+  const hour = utc(2026, 10, 12, 11);
+  const h1 = [candle(hour, 3990, 4010, 3980, 4000)]; // complete: fetched after 12:00
+  const m1 = [candle(hour + 60, 3901, 3905, 3899, 3900)]; // delayed 11:01 snapshot
+  const out = extendWith(h1, m1, 'H1');
+  assert.equal(out[0].c, 4000, 'close kept');
+  assert.equal(out[0].l, 3899, 'its low is still a real traded price');
+  // While the hour is forming (fetched at 11:30), later minutes do move it.
+  const forming = [{ ...candle(hour, 3990, 4010, 3980, 4000), asOf: hour + 1800 }];
+  assert.equal(extendWith(forming, [candle(hour + 60, 1, 1, 1, 1)], 'H1')[0].c, 4000, '11:01 is older than the snapshot');
+  assert.equal(extendWith(forming, [candle(hour + 1800, 4000, 4002, 3999, 4001)], 'H1')[0].c, 4001, '11:30 is newer');
 });
 
 test('extendWith does not build candles across a gap in the finer data', () => {
@@ -155,6 +182,7 @@ test('ema, rsi, atr', () => {
 
   const up = Array.from({ length: 30 }, (_, i) => 100 + i);
   assert.equal(rsi(up, 14).at(-1), 100);
+  assert.equal(rsi(new Array(30).fill(100), 14).at(-1), 50, 'flat prices are neutral');
   const flatThenDown = Array.from({ length: 30 }, (_, i) => 100 - i);
   assert.equal(rsi(flatThenDown, 14).at(-1), 0);
 

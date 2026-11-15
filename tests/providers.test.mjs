@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { dukaUrl, parseDuka, parseSwissquote, parseTwelve, proxied, twelveUrl } from '../app/src/main/assets/www/js/data/providers.js';
+import { cleanCandles, dukaUrl, parseDuka, parseSwissquote, parseTwelve, proxied, twelveUrl } from '../app/src/main/assets/www/js/data/providers.js';
 
 test('Dukascopy URL and JSONP parsing', () => {
   const url = new URL(dukaUrl('H1', 1000, 1794468113000));
@@ -53,6 +53,24 @@ test('Swissquote quote parsing', () => {
   ]);
   assert.deepEqual(parseSwissquote(text), { bid: 3959.7, ask: 3960.2, t: 1794468562 });
   assert.throws(() => parseSwissquote('[]'));
+});
+
+test('malformed candles are dropped, duplicates keep the later row (audit F08)', () => {
+  const c = parseDuka('cb([[1794463200000,4000,4005,3995,4001,1],[1794463200000,4001,4006,3996,4002,1],[1794466800000,4000,3990,4010,4050,1]]);');
+  assert.equal(c.length, 1);
+  assert.equal(c[0].c, 4002);
+  const t = 1794463200;
+  const ok = { t, o: 2, h: 3, l: 1, c: 2 };
+  assert.deepEqual(cleanCandles([ok, { ...ok, t: t + 0.5 }, { ...ok, t: 12 }, { ...ok, h: 1.5 }, { ...ok, l: 2.5 }, { ...ok, o: Infinity }, { ...ok, c: '2' }, null]), [ok]);
+});
+
+test('malformed quotes are rejected (audit F09)', () => {
+  const q = (p, ts = 1794468561115) => JSON.stringify([{ spreadProfilePrices: [{ spreadProfile: 'prime', ...p }], ts }]);
+  assert.throws(() => parseSwissquote(q({ bid: 1e400, ask: 4000 })));
+  assert.throws(() => parseSwissquote(q({ bid: 4001, ask: 4000 })), undefined, 'crossed');
+  assert.throws(() => parseSwissquote(q({ bid: 3000, ask: 4000 })), undefined, 'absurd spread');
+  assert.throws(() => parseSwissquote(JSON.stringify([{ spreadProfilePrices: [{ spreadProfile: 'prime', bid: 4000, ask: 4000.5 }] }])), undefined, 'no timestamp');
+  assert.deepEqual(parseSwissquote(q({ bid: '4000.1', ask: '4000.4' })), { bid: 4000.1, ask: 4000.4, t: 1794468561 }, 'numeric strings become numbers');
 });
 
 test('requests go through the app proxy', () => {

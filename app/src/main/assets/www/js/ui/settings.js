@@ -38,14 +38,18 @@ function alertStateBlock() {
   const allowed = n.notificationsAllowed();
   const unrestricted = n.batteryUnrestricted();
   let html = `<div class="kv"><span>Background monitoring</span><span>${on ? 'On' : 'Off'}</span></div>`;
+  const channel = n.alertChannelEnabled ? n.alertChannelEnabled() : true;
   if (on && !allowed) {
     html += '<p class="note" style="padding-top:10px">Notifications are switched off for this app, so alerts cannot be shown.</p>';
+  } else if (!channel) {
+    html += '<p class="note" style="padding-top:10px">The "Level alerts" notification category is switched off, so alerts will not be shown. Monitoring itself still runs.</p>';
   }
   html += '<div class="btns" style="padding-top:12px">';
   html += on
     ? '<button class="btn" data-act="mon-stop">Stop monitoring</button>'
     : '<button class="btn" data-act="mon-start">Start background monitoring</button>';
   if (!allowed) html += '<button class="btn" data-act="mon-notif">Notification settings</button>';
+  else if (!channel) html += '<button class="btn" data-act="mon-channel">Level alerts settings</button>';
   if (!unrestricted) html += '<button class="btn" data-act="mon-battery">Battery settings</button>';
   html += '</div>';
   if (!unrestricted) {
@@ -109,7 +113,8 @@ function statusBlock() {
     ${feedLine('M30', '30 minute')}
     ${feedLine('H1', '1 hour (builds H4 and D1)')}
     ${feedLine('D1U', 'Daily (builds W1)')}
-    ${st.error ? `<div class="kv"><span>Last error</span><span>${esc(st.error)}</span></div>` : ''}
+    ${(st.errors || []).map((e) => `<div class="kv"><span>Problem</span><span>${esc(e)}</span></div>`).join('')}
+    ${store.analysis && store.analysis.stale.length ? `<div class="kv"><span>Out of date</span><span>${esc(store.analysis.stale.join(', '))}</span></div>` : ''}
     ${st.quoteError && q ? `<div class="kv"><span>Live price error</span><span>${esc(st.quoteError)}</span></div>` : ''}`;
 }
 
@@ -141,10 +146,10 @@ export function renderSettings() {
       <label class="opt"><input type="radio" name="src" value="dukascopy"${source === 'dukascopy' ? ' checked' : ''}>
         <span><span class="opt-t">Dukascopy</span><div class="opt-d">Spot XAU/USD, no key needed. Unofficial feed: it can change or stop without notice.</div></span></label>
       <label class="opt"><input type="radio" name="src" value="twelvedata"${source === 'twelvedata' ? ' checked' : ''}>
-        <span><span class="opt-t">Twelve Data</span><div class="opt-d">Backup. Needs your own free API key from twelvedata.com. Updates every 2 minutes to stay inside the free plan.</div></span></label>
+        <span><span class="opt-t">Twelve Data</span><div class="opt-d">Backup. Needs your own free API key from twelvedata.com. Updates every 4 minutes to stay inside the free plan.</div></span></label>
       <div class="field" id="td-box"${source === 'twelvedata' ? '' : ' hidden'} style="padding-top:10px">
         <label class="lbl" for="td-key">Twelve Data API key (stored only on this phone)</label>
-        <input id="td-key" class="inp" type="text" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your key">
+        <input id="td-key" class="inp" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your key">
       </div>
       <div class="btns">
         <button class="btn" data-act="save-key"${source === 'twelvedata' ? '' : ' hidden'}>Save key and use</button>
@@ -163,7 +168,7 @@ export function renderSettings() {
     </div>
 
     <div class="card">
-      <div class="card-h"><h2>About</h2><span>version 1.2.0</span></div>
+      <div class="card-h"><h2>About</h2><span>version 1.3.0</span></div>
       <p class="note">This app calculates support and resistance from price history. It does not give buy or sell signals and is not financial advice. Prices come from third-party feeds and can differ from your broker by a small amount.</p>
       <p class="note">Candles: Dukascopy (personal use) or Twelve Data. Live price: Swissquote public quotes. Charts: TradingView Lightweight Charts™ (Apache 2.0).</p>
     </div>`;
@@ -271,6 +276,7 @@ export function initSettings(el) {
       if (a === 'mon-start' && n) n.startMonitoring();
       else if (a === 'mon-stop' && n) n.stopMonitoring();
       else if (a === 'mon-notif' && n) n.openNotificationSettings();
+      else if (a === 'mon-channel' && n) n.openAlertChannelSettings();
       else if (a === 'mon-battery' && n) n.openBatterySettings();
       else if (a === 'alerts-clear') {
         clearAlerts();

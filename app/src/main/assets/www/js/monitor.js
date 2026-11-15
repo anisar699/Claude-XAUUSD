@@ -38,15 +38,30 @@ function summary(a, price) {
   return parts.join(' · ');
 }
 
+// Tell the service when the market opens and closes, so it can let the phone
+// sleep while the market is closed (see MonitorService.marketState).
+let reported = '';
+function reportMarket(m) {
+  const key = `${m.open}:${m.nextChange}`;
+  if (key === reported || !bridge || !bridge.marketState) return;
+  reported = key;
+  bridge.marketState(m.open, m.nextChange * 1000);
+}
+
 function evaluate() {
   const t = nowSec();
+  const m = marketStatus(t);
+  reportMarket(m);
   const a = store.analysis;
   if (!a) return setStatus(store.status.error ? 'Cannot load market data · retrying' : 'Loading market data…');
   // Alerts need a live price and current candles. Without both, say so rather
   // than judge levels against old numbers.
-  if (!marketStatus(t).open) return setStatus(`Market closed · last ${px(a.lastPrice)} · alerts paused`);
+  if (!m.open) return setStatus(`Market closed · last ${px(a.lastPrice)} · alerts paused`);
   if (!store.priceIsLive()) return setStatus('No live price · alerts paused');
   if (t - a.lastT > STALE_CANDLES_SEC) return setStatus('Candles not updating · alerts paused');
+  if (a.stale.length) return setStatus(`${a.stale.join(', ')} candles out of date · alerts paused`);
+  // A feed that failed leaves its timeframes with old or missing candles.
+  if (store.status.errors.length) return setStatus(`Data problem (${store.status.errors[0]}) · alerts paused`);
 
   const price = store.price();
   const alerts = evaluateAlerts(state, { now: t, price, areas: a.conf, tol: a.tol, atrH1: a.atrH1, prefs: store.settings.alerts });

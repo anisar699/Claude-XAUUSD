@@ -98,6 +98,11 @@ export function bucketEnd(tf, start) {
     const d = new Date((start + serverOffsetSec(start)) * 1000);
     return serverMonthStart(d.getUTCFullYear(), d.getUTCMonth() + 1);
   }
+  if (tf === 'H4' || tf === 'D1' || tf === 'W1') {
+    // The server clock follows New York daylight saving, so a bucket can be
+    // an hour shorter or longer than nominal in UTC.
+    return BUCKETS[tf](start + TF[tf].sec + 2 * HOUR);
+  }
   return start + TF[tf].sec;
 }
 

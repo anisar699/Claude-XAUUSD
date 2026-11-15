@@ -2,6 +2,7 @@
 // storage or DOM, so it runs the same in the app and in tests.
 
 import { aggregateTf, extendWith, stitchDays, utcDaysToServerDays } from './candles.js';
+import { bucketOf } from './time.js';
 import { atr, lastValue, trendOf } from './indicators.js';
 import { computeZones } from './sr.js';
 import { keyLevels } from './pivots.js';
@@ -41,6 +42,14 @@ export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HA
   const last = lastClose(series);
   if (!last) return null;
 
+  // Timeframes whose candles stop before the newest candle's period: their
+  // feed failed or fell behind and the minute data cannot bridge the gap.
+  // Their levels are shown but alerts must not rely on them.
+  const stale = tfs.filter((tf) => {
+    const s = series[tf];
+    return !s || !s.length || s[s.length - 1].t < bucketOf(tf, last.t);
+  });
+
   const zones = {};
   const trend = {};
   for (const tf of tfs) {
@@ -66,5 +75,5 @@ export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HA
   const d1 = series.D1;
   const prevClose = d1.length > 1 ? d1[d1.length - 2].c : null;
 
-  return { now, lastPrice: price, lastT: last.t, series, zones, trend, key, conf, tol, atrH1, atrD1, day, prevClose };
+  return { now, lastPrice: price, lastT: last.t, series, zones, trend, key, conf, tol, atrH1, atrD1, day, prevClose, stale };
 }
