@@ -116,7 +116,10 @@ class MonitorService : Service() {
         handler.post {
             if (!running) return@post
             holdWake(true)
-            web?.evaluateJavascript("window.__monitorTick && window.__monitorTick()", null)
+            web?.evaluateJavascript(
+                "window.__monitorResync && window.__monitorResync(); window.__monitorTick && window.__monitorTick()",
+                null,
+            )
         }
     }
 

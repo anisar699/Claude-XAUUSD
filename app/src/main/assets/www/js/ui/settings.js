@@ -91,7 +91,7 @@ function alertsCard() {
         <div class="seg">${DISTANCE_CHOICES.map((d) => chip('data-distance', d, d === 'auto' ? `Auto ($${auto.toFixed(1)})` : `$${d}`, p.distance === d)).join('')}</div>
       </div>
       <div id="al-recent">${lastAlertRecent}</div>
-      <p class="note" style="padding-top:10px">Alerts pause while the market is closed or the price feed is stale. Monitoring shows a permanent notification, uses more battery, and does not restart by itself after the phone reboots.</p>
+      <p class="note" style="padding-top:10px">Alerts pause while the market is closed, the price is not live, or a candle feed has a problem. Monitoring shows a permanent notification and keeps the phone awake only while the market is open. It does not restart by itself after the phone reboots or the app is updated.</p>
     </div>`;
 }
 

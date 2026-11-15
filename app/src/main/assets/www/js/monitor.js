@@ -78,6 +78,13 @@ function evaluate() {
   }
 }
 
+// The service calls this after a wake-up alarm: report the market state again
+// even if it has not changed, so the service can let the phone sleep again
+// if the market is still closed.
+window.__monitorResync = () => {
+  reported = '';
+};
+
 window.__monitorTick = () => {
   store.reloadSettings();
   store.tick();
