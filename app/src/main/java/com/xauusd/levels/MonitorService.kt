@@ -147,8 +147,9 @@ class MonitorService : Service() {
     private inner class Bridge {
         /**
          * open: the market is open now. nextChangeMs: when that changes (epoch ms).
-         * While closed, let the phone sleep and set an alarm for the reopening;
-         * Android may deliver it a few minutes late when the phone is idle.
+         * While closed, let the phone sleep and set an alarm for the reopening.
+         * It must be an exact alarm: Android delivers an inexact one up to
+         * hours late, which would miss the open.
          */
         @JavascriptInterface
         fun marketState(open: Boolean, nextChangeMs: Double) {
@@ -159,7 +160,13 @@ class MonitorService : Service() {
                     holdWake(true)
                 } else {
                     val at = nextChangeMs.toLong().coerceAtLeast(System.currentTimeMillis() + 60_000)
-                    alarms().setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmIntent())
+                    val am = alarms()
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()) {
+                        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmIntent())
+                    } else {
+                        // Exact alarms switched off for this app: the best Android allows.
+                        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmIntent())
+                    }
                     holdWake(false)
                 }
             }
