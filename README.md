@@ -103,11 +103,56 @@ drawn narrower. What the test also shows:
   predict which levels price turned at, and neither did touches, age or
   distance from price.
 
+### Multi-timeframe areas (1.4)
+
+Each source of levels was scored on its own against random lines, on the
+hourly chart (2 years, next 48 hours) and on the 15-minute chart (10 months,
+next 16 hours):
+
+| Source | Hourly chart | 15-minute chart |
+|---|---|---|
+| H1 swing zones | best: marked +5/+8 more turning points | neutral |
+| M15 swing zones | – | +4/+5 |
+| Pivot R1/S1 | slightly better | mixed |
+| Round $50 / $100 | slightly better | price turned there more often (+2 to +14) |
+| D1 and W1 swing zones | **worse** than random lines | neutral |
+| Pivot R3/S3, previous month high/low | **worse** than random lines | worse / – |
+| Previous day high/low, Asia session high/low | – | **worse** than random lines |
+| Volume-profile peaks, ATR zigzag swings | no better than random | – |
+
+The area weights now follow these results (`TF_WEIGHT` etc. in
+`js/core/confluence.js`): H1 zones and R1/S1 pivots count most, round
+numbers more than before, D1/W1 zones and the previous month's high/low
+little, R3/S3 pivots not at all. Before, the D1 and W1 zones counted most.
+
+Areas, points above random lines (tune / check):
+
+| | 1.3 | 1.4 |
+|---|---|---|
+| Hourly chart, H1-W1 timeframes, turning points marked | +6 / +7 | **+11 / +14** |
+| Hourly chart, app default timeframes, turning points marked | +11 / +13 | **+13 / +18** |
+| Hourly chart, price turned at a reached area | +0 / +2 | +2 / +3 |
+| 15-minute chart, turning points marked | +5 / +5 | +5 / +5 |
+
+On the newest week (14-20 Nov 2026, not used for any choice) the 15-minute
+results were within noise of each other (about 5 independent test points).
+
+Tried and not adopted, because they did not beat the current version on
+both parts of the history: weighting swings by volume or by rejection-wick
+length, volume-profile levels, ATR zigzag swings, a level's past
+reversal/break record, a trend filter (+2 to +3 points at best), $10 round
+numbers, dropping the previous day's high/low, other area widths and
+centres. A model of which reached level price turns at found no usable
+signal, so strength is still not a probability.
+
 ```sh
 NODE_USE_ENV_PROXY=1 node tools/sr-backtest.mjs --fetch data   # history from Dukascopy
 node tools/sr-backtest.mjs data            # zones per timeframe, 1.1 vs current
 node tools/sr-backtest.mjs data areas      # multi-timeframe areas
 node tools/sr-backtest.mjs data strength   # strength bars vs outcome
+node tools/research/sources.mjs . data     # each source alone, hourly chart
+node tools/research/sources15.mjs . data   # each source alone, 15-minute chart
+node tools/research/features2.mjs . data   # level properties vs outcome
 ```
 
 ## Data sources

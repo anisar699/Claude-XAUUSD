@@ -4,10 +4,17 @@
 
 import { clusterByPrice, strengthOf } from './sr.js';
 
-const TF_WEIGHT = { M5: 1, M15: 1.5, M30: 2, H1: 3, H4: 4, D1: 5, W1: 6 };
-const PIVOT_WEIGHT = { PP: 2.5, R1: 2.5, S1: 2.5, R2: 2, S2: 2, R3: 1.5, S3: 1.5 };
-const PERIOD_FACTOR = { D: 1, W: 1.4, M: 1.8 };
-const PREV_WEIGHT = { D: 3, W: 4, M: 5 };
+// How much each source counts. Set from a walk-forward test of each source on
+// its own against random lines (2 years of hourly gold, scored on the next
+// 48 hours; README has the numbers). H1 swing zones and the R1/S1 pivots
+// marked later turning points best; D1 and W1 swing zones, R3/S3 pivots and
+// the previous month's high and low did worse than random lines at that
+// scale, so they count little or not at all. Round numbers did slightly
+// better than random.
+export const TF_WEIGHT = { M5: 1, M15: 1.5, M30: 2, H1: 4, H4: 3, D1: 1.5, W1: 1 };
+export const PIVOT_WEIGHT = { PP: 1.5, R1: 3, S1: 3, R2: 2, S2: 2 }; // R3/S3 left out
+const PREV_WEIGHT = { D: 1.5, W: 2, M: 1 };
+const ROUND_WEIGHT = { 1000: 3, 100: 2.5, 50: 2 };
 
 export function buildLevelPool({ zonesByTf, key, price, span }) {
   const pool = [];
@@ -25,9 +32,10 @@ export function buildLevelPool({ zonesByTf, key, price, span }) {
   for (const [id, k] of Object.entries(key || {})) {
     if (k.pivots) {
       for (const [name, value] of Object.entries(k.pivots)) {
+        if (!PIVOT_WEIGHT[name]) continue;
         pool.push({
           price: value,
-          w: PIVOT_WEIGHT[name] * PERIOD_FACTOR[id],
+          w: PIVOT_WEIGHT[name],
           tag: `${k.short}-${name}`,
           group: 'pivot',
         });
@@ -41,7 +49,7 @@ export function buildLevelPool({ zonesByTf, key, price, span }) {
   if (price && span) {
     const from = Math.ceil((price - span) / 50) * 50;
     for (let r = from; r <= price + span; r += 50) {
-      const w = r % 1000 === 0 ? 3.5 : r % 100 === 0 ? 2 : 1;
+      const w = r % 1000 === 0 ? ROUND_WEIGHT[1000] : r % 100 === 0 ? ROUND_WEIGHT[100] : ROUND_WEIGHT[50];
       pool.push({ price: r, w, tag: String(r), group: 'round' });
     }
   }

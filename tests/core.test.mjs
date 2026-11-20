@@ -298,8 +298,11 @@ test('confluence merges levels from several sources', () => {
   };
   const key = { D: { short: 'D', pivots: { PP: 3975, R1: 4002.5, S1: 3930, R2: 4040, S2: 3900, R3: 4060, S3: 3880 }, prev: { h: 4010, l: 3940 } } };
   const pool = buildLevelPool({ zonesByTf, key, price: 3970, span: 60 });
-  assert.ok(pool.some((p) => p.tag === '4000' && p.w === 3.5));
+  assert.ok(pool.some((p) => p.tag === '4000' && p.w === 3));
   assert.ok(pool.some((p) => p.tag === 'PDH' && p.price === 4010));
+  assert.ok(!pool.some((p) => p.tag === 'D-R3' || p.tag === 'D-S3'), 'R3/S3 tested worse than random lines and are left out');
+  const w = (tag) => pool.find((p) => p.tag === tag).w;
+  assert.ok(w('D-R1') > w('D-PP'), 'R1/S1 count more than PP');
   const conf = confluence(pool, 4);
   assert.ok(conf.every((z, i) => i === 0 || conf[i - 1].price > z.price), 'sorted high to low');
   const narrow = confluence(pool, 4, 0.5);

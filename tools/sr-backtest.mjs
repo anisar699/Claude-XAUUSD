@@ -30,13 +30,13 @@ import { atr } from '../app/src/main/assets/www/js/core/indicators.js';
 import { computeZones, ZONES_V1 } from '../app/src/main/assets/www/js/core/sr.js';
 import { analyse } from '../app/src/main/assets/www/js/core/model.js';
 
-const BAND = 6;
-const NEAR = 0.3;
+export const BAND = 6;
+export const NEAR = 0.3;
 const REVERSAL = 1.0;
-const SWING_K = 5;
+export const SWING_K = 5;
 const SWING_MOVE = 1.5;
 const TRIALS = 30;
-const TUNE_SHARE = 0.6;
+export const TUNE_SHARE = 0.6;
 
 // ---- data ---------------------------------------------------------------------
 
@@ -58,28 +58,29 @@ async function fetchHistory(dir) {
       for (const r of data) rows.set(r[0] / 1000, r);
       before = Math.min(...data.map((r) => r[0]));
     }
-    const out = [...rows.values()].sort((a, b) => a[0] - b[0]).map((r) => `${r[0] / 1000},${r[1]},${r[2]},${r[3]},${r[4]}`);
+    const out = [...rows.values()].sort((a, b) => a[0] - b[0]).map((r) => `${r[0] / 1000},${r[1]},${r[2]},${r[3]},${r[4]},${r[5] || 0}`);
     writeFileSync(path.join(dir, `${tf.toLowerCase()}.csv`), out.join('\n'));
     console.log(`${tf}: ${out.length} candles`);
   }
 }
 
-function load(dir, tf) {
+export function load(dir, tf) {
   return readFileSync(path.join(dir, `${tf.toLowerCase()}.csv`), 'utf8')
     .trim()
     .split('\n')
     .map((l) => {
-      const [t, o, h, lo, c] = l.split(',').map(Number);
-      return { t, o, h, l: lo, c, v: 0 };
+      const [t, o, h, lo, c, v] = l.split(',').map(Number);
+      return { t, o, h, l: lo, c, v: v || 0 };
     });
 }
 
 // ---- scoring ------------------------------------------------------------------
 
 let seed = 7;
+export const setSeed = (x) => (seed = x);
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
 
-function turningPoints(c, i, H, A) {
+export function turningPoints(c, i, H, A) {
   const out = [];
   const end = Math.min(c.length - 1 - SWING_K, i + H);
   for (let k = Math.max(i + 1, SWING_K); k <= end; k++) {
@@ -96,13 +97,13 @@ function turningPoints(c, i, H, A) {
   return out;
 }
 
-function reached(c, i, H, m, A) {
+export function reached(c, i, H, m, A) {
   const end = Math.min(c.length - 1, i + H);
   for (let j = i + 1; j <= end; j++) if (c[j].l <= m + NEAR * A && c[j].h >= m - NEAR * A) return true;
   return false;
 }
 
-function reaction(c, i, H, A, lo, hi) {
+export function reaction(c, i, H, A, lo, hi) {
   const p = c[i].c;
   const mid = (lo + hi) / 2;
   if (p >= lo && p <= hi) return null;
@@ -118,11 +119,11 @@ function reaction(c, i, H, A, lo, hi) {
   return null;
 }
 
-function tally() {
+export function tally() {
   return { n: 0, lv: 0, w: 0, hit: 0, reach: 0, rHit: 0, rReach: 0, tps: 0, cap: 0, rCap: 0, rTps: 0, held: 0, react: 0, rHeld: 0, rReact: 0, byS: {} };
 }
 
-function score(T, c, i, H, A, zones) {
+export function score(T, c, i, H, A, zones) {
   const p = c[i].c;
   const near = zones.filter((z) => Math.abs(z.price - p) <= BAND * A);
   const tps = turningPoints(c, i, H, A);
@@ -178,7 +179,7 @@ export const VARIANTS = {
   current: {},
 };
 
-const PLAN = { M5: { warm: 600, H: 72 }, M15: { warm: 500, H: 64 }, H1: { warm: 500, H: 48 }, H4: { warm: 380, H: 24 }, D1: { warm: 320, H: 10 }, W1: { warm: 170, H: 6 } };
+export const PLAN = { M5: { warm: 600, H: 72 }, M15: { warm: 500, H: 64 }, H1: { warm: 500, H: 48 }, H4: { warm: 380, H: 24 }, D1: { warm: 320, H: 10 }, W1: { warm: 170, H: 6 } };
 
 export function run(dir, names, opts = {}) {
   const series = { M5: load(dir, 'M5'), M15: load(dir, 'M15'), H1: load(dir, 'H1') };
