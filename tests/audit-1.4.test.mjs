@@ -196,3 +196,18 @@ test('a minute or two missing from the minute candles does not mark the hour; ha
   const big = analyse({ M1: minutes((t) => t >= start + 600 && t < start + 2400) }, { now, tfs: ['H1'] });
   assert.ok(big.gaps.includes('H1'));
 });
+
+test('at the weekend the last trade time comes from the intraday feeds, not the UTC daily candle', () => {
+  const sun = utc(2026, 10, 22, 11, 47);
+  const fri = utc(2026, 10, 20, 21, 59);
+  const raw = {
+    M1: [{ t: fri, o: 3538, h: 3538.5, l: 3537.9, c: 3538.18, asOf: sun }],
+    H1: [{ t: utc(2026, 10, 20, 21), o: 3540, h: 3541, l: 3536, c: 3538.18, asOf: sun }],
+    D1U: [{ t: utc(2026, 10, 20), o: 3620, h: 3626, l: 3514, c: 3538.2, asOf: sun }],
+  };
+  const o = latestObservation(raw, sun);
+  assert.equal(o.at, utc(2026, 10, 20, 22), 'Friday 22:00 UTC, the close');
+  const a = analyse(raw, { now: sun, tfs: ['H1'] });
+  assert.deepEqual(a.stale, [], 'nothing is out of date at the weekend');
+  assert.equal(latestObservation({ D1U: raw.D1U }, sun).feed, 'D1U', 'daily candles still serve when nothing else is there');
+});

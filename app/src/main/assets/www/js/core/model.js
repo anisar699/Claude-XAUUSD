@@ -38,23 +38,27 @@ export function closedOnly(series, tf, now) {
 }
 
 // The most recent price the candle feeds know: the last candle of whichever
-// feed has seen furthest. A feed that fell behind does not win just because it
-// is a finer timeframe. `at` is how far that candle is known: when it was
-// fetched, or its end, whichever is earlier.
-const OBSERVED = [['M1', 'M1'], ['M5', 'M5'], ['M15', 'M15'], ['M30', 'M30'], ['H1', 'H1'], ['D1U', 'D1']];
+// intraday feed has seen furthest. A feed that fell behind does not win just
+// because it is a finer timeframe. `at` is how far that candle is known: when
+// it was fetched, or its end, whichever is earlier. The feed's own UTC daily
+// candles are only a fallback when no intraday feed has data: their end
+// (UTC midnight) says nothing about when trading in them stopped.
+const OBSERVED = ['M1', 'M5', 'M15', 'M30', 'H1'];
 
 export function latestObservation(raw, now) {
   let best = null;
-  for (const [feed, tf] of OBSERVED) {
+  for (const feed of OBSERVED) {
     const s = raw[feed];
     if (!s || !s.length) continue;
     const c = s[s.length - 1];
-    // A UTC daily candle is not on the New York grid; its end is t + 1 day.
-    const end = tf === 'D1' ? c.t + 86400 : bucketEnd(tf, c.t);
-    const at = Math.min(now, end, c.asOf != null ? c.asOf : Infinity);
+    const at = Math.min(now, bucketEnd(feed, c.t), c.asOf != null ? c.asOf : Infinity);
     if (!best || at > best.at) best = { price: c.c, t: c.t, at, feed };
   }
-  return best;
+  if (best) return best;
+  const d = raw.D1U;
+  if (!d || !d.length) return null;
+  const c = d[d.length - 1];
+  return { price: c.c, t: c.t, at: Math.min(now, c.t + 86400, c.asOf != null ? c.asOf : Infinity), feed: 'D1U' };
 }
 
 // Closed candles a timeframe needs before its zones count as ready: a cold
