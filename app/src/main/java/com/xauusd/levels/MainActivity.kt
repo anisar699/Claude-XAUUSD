@@ -118,6 +118,11 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun monitoring(): Boolean = MonitorService.running
 
+        /** "state|status text", e.g. "running|4012 · R 4020.50 (+8)". See MonitorService.state. */
+        @JavascriptInterface
+        fun monitorState(): String =
+            if (MonitorService.running) "${MonitorService.state}|${MonitorService.statusLine}" else "${MonitorService.state}|"
+
         @JavascriptInterface
         fun notificationsAllowed(): Boolean = this@MainActivity.notificationsAllowed()
 

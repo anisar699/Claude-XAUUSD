@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 
@@ -28,6 +29,13 @@ import android.webkit.WebView
  *
  * The service calls into the page on its own clock, because timers inside a
  * windowless WebView may be throttled.
+ *
+ * The page proves it is working with a heartbeat on every check. Without one
+ * for [HEARTBEAT_TIMEOUT_MS] (a script that failed to load, a stuck page) the
+ * page is rebuilt; after [MAX_RESTARTS] rebuilds in a row the service gives
+ * up, says so, and stops, rather than showing "on" while nothing runs. The
+ * wake lock is a lease renewed by heartbeats, so a stuck page cannot keep the
+ * phone awake for more than [WAKE_LEASE_MS].
  */
 class MonitorService : Service() {
 
@@ -36,10 +44,39 @@ class MonitorService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var statusText = "Starting…"
 
+    // Times on the uptime clock, which stops while the phone sleeps (as the
+    // handler does), so a night with the market closed is not a missed beat.
+    private var pageStartedAt = 0L
+    private var lastBeat = 0L
+    private var lastLease = 0L
+    private var lastRestart = 0L
+    private var restarts = 0
+    private var wantAwake = true
+
     private val tick = object : Runnable {
         override fun run() {
             web?.evaluateJavascript("window.__monitorTick && window.__monitorTick()", null)
             handler.postDelayed(this, TICK_MS)
+        }
+    }
+
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (!running) return
+            val now = SystemClock.uptimeMillis()
+            val since = now - maxOf(lastBeat, pageStartedAt)
+            if (since > HEARTBEAT_TIMEOUT_MS) {
+                if (restarts >= MAX_RESTARTS) {
+                    fail()
+                    return
+                }
+                restarts++
+                lastRestart = now
+                setState("restarting", "Monitor not responding · restarting it")
+                web?.destroy()
+                web = newWebView()
+            }
+            handler.postDelayed(this, WATCHDOG_MS)
         }
     }
 
@@ -65,9 +102,11 @@ class MonitorService : Service() {
         }
         running = true
         instance = this
+        setState("starting", statusText)
         holdWake(true) // until the page reports the market state
         web = newWebView()
         handler.postDelayed(tick, TICK_MS)
+        handler.postDelayed(watchdog, WATCHDOG_MS)
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -80,6 +119,7 @@ class MonitorService : Service() {
         setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         webViewClient = AppWebClient(assets, settings.userAgentString) { dead -> rendererGone(dead) }
         addJavascriptInterface(Bridge(), "AndroidMonitor")
+        pageStartedAt = SystemClock.uptimeMillis()
         loadUrl("${AppWebClient.ORIGIN}/monitor.html")
     }
 
@@ -92,15 +132,47 @@ class MonitorService : Service() {
         }
     }
 
-    // Long-lived by design while the market is open; released when it closes
-    // and in onDestroy.
-    @SuppressLint("WakelockTimeout", "Wakelock")
+    // A lease, not an open-ended lock: each acquire runs for WAKE_LEASE_MS and
+    // heartbeats renew it while the market is open. Released when the market
+    // closes, when the page stops answering for good, and in onDestroy.
     private fun holdWake(on: Boolean) {
         val lock = wakeLock ?: (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "xauusd:monitor")
-            .also { wakeLock = it }
-        if (on && !lock.isHeld) lock.acquire()
-        if (!on && lock.isHeld) lock.release()
+            .also {
+                it.setReferenceCounted(false) // acquire() renews the lease
+                wakeLock = it
+            }
+        if (on) {
+            lock.acquire(WAKE_LEASE_MS)
+            lastLease = SystemClock.uptimeMillis()
+        } else if (lock.isHeld) {
+            lock.release()
+        }
+    }
+
+    private fun setState(newState: String, text: String) {
+        state = newState
+        if (text != statusText) {
+            statusText = text.take(200)
+            statusLine = statusText
+            if (running) notifications().notify(ONGOING_ID, ongoing())
+        }
+    }
+
+    // The page kept failing: say so in a notification that stays after the
+    // service is gone, and stop.
+    private fun fail() {
+        state = "failed"
+        holdWake(false)
+        val n = Notification.Builder(this, CHANNEL_MONITOR)
+            .setSmallIcon(R.drawable.ic_stat_levels)
+            .setContentTitle("XAUUSD alerts stopped")
+            .setContentText("The monitor stopped responding. Open the app to start it again.")
+            .setContentIntent(openApp())
+            .setAutoCancel(true)
+            .build()
+        notifications().notify(FAILED_ID, n)
+        stopSelf()
     }
 
     private fun alarmIntent(): PendingIntent = PendingIntent.getBroadcast(
@@ -115,6 +187,7 @@ class MonitorService : Service() {
     internal fun wake() {
         handler.post {
             if (!running) return@post
+            wantAwake = true
             holdWake(true)
             web?.evaluateJavascript(
                 "window.__monitorResync && window.__monitorResync(); window.__monitorTick && window.__monitorTick()",
@@ -134,8 +207,11 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         running = false
+        if (state != "failed") state = "stopped"
+        statusLine = ""
         if (instance === this) instance = null
         handler.removeCallbacks(tick)
+        handler.removeCallbacks(watchdog)
         alarms().cancel(alarmIntent())
         web?.destroy()
         web = null
@@ -158,6 +234,7 @@ class MonitorService : Service() {
         fun marketState(open: Boolean, nextChangeMs: Double) {
             handler.post {
                 if (!running) return@post
+                wantAwake = open
                 if (open) {
                     alarms().cancel(alarmIntent())
                     holdWake(true)
@@ -180,7 +257,25 @@ class MonitorService : Service() {
             handler.post {
                 if (!running || text == statusText) return@post
                 statusText = text.take(200)
+                statusLine = statusText
                 notifications().notify(ONGOING_ID, ongoing())
+            }
+        }
+
+        /** kind: running, warmup or paused. Proves the page's checks are running. */
+        @JavascriptInterface
+        fun heartbeat(kind: String) {
+            handler.post {
+                if (!running) return@post
+                val now = SystemClock.uptimeMillis()
+                lastBeat = now
+                if (restarts > 0 && now - lastRestart > STABLE_MS) restarts = 0
+                state = when (kind) {
+                    "running", "warmup", "paused" -> kind
+                    else -> "running"
+                }
+                // Renew the wake lease while the market is open.
+                if (wantAwake && now - lastLease > WAKE_RENEW_MS) holdWake(true)
             }
         }
 
@@ -236,11 +331,32 @@ class MonitorService : Service() {
         const val CHANNEL_ALERTS = "alerts"
         private const val ONGOING_ID = 1
         private const val ALERT_ID = 2
+        private const val FAILED_ID = 3
         private const val TICK_MS = 5_000L
+        private const val WATCHDOG_MS = 30_000L
+        private const val HEARTBEAT_TIMEOUT_MS = 90_000L
+        private const val MAX_RESTARTS = 3
+        private const val STABLE_MS = 10 * 60_000L
+        private const val WAKE_LEASE_MS = 10 * 60_000L
+        private const val WAKE_RENEW_MS = 2 * 60_000L
 
         /** True while the service is alive in this process. */
         @Volatile
         var running = false
+            private set
+
+        /**
+         * starting, running, warmup (history loading), paused (market closed or
+         * no usable data), restarting, stopped or failed. Set from heartbeats,
+         * so "running" means the checks really ran recently.
+         */
+        @Volatile
+        var state = "stopped"
+            private set
+
+        /** The text of the ongoing notification. */
+        @Volatile
+        var statusLine = ""
             private set
 
         // The running service, for the wake-up alarm. Cleared in onDestroy.

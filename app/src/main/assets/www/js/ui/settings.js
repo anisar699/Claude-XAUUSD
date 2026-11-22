@@ -37,7 +37,7 @@ function alertStateBlock() {
   const on = n.monitoring();
   const allowed = n.notificationsAllowed();
   const unrestricted = n.batteryUnrestricted();
-  let html = `<div class="kv"><span>Background monitoring</span><span>${on ? 'On' : 'Off'}</span></div>`;
+  let html = `<div class="kv"><span>Background monitoring</span><span>${esc(monitorText(n, on))}</span></div>`;
   const channel = n.alertChannelEnabled ? n.alertChannelEnabled() : true;
   if (on && !allowed) {
     html += '<p class="note" style="padding-top:10px">Notifications are switched off for this app, so alerts cannot be shown.</p>';
@@ -56,6 +56,25 @@ function alertStateBlock() {
     html += '<p class="note">Android may pause the app when the phone sits idle. For dependable alerts, set battery use for this app to Unrestricted.</p>';
   }
   return html;
+}
+
+// What the service reports from the monitor page's heartbeats, so "On"
+// means the checks are really running.
+const MONITOR_STATES = {
+  starting: 'On · starting',
+  running: 'On · checking levels',
+  warmup: 'On · loading history, alerts start when ready',
+  paused: 'On · alerts paused',
+  restarting: 'On · restarting the monitor',
+};
+
+function monitorText(n, on) {
+  const raw = n.monitorState ? String(n.monitorState()) : '';
+  const [state, ...rest] = raw.split('|');
+  const line = rest.join('|');
+  if (!on) return state === 'failed' ? 'Off · it stopped responding; start it again' : 'Off';
+  const base = MONITOR_STATES[state] || 'On';
+  return state === 'paused' && line ? `${base}: ${line}` : base;
 }
 
 function alertRecentBlock() {
@@ -82,8 +101,10 @@ function alertsCard() {
         <span><span class="opt-t">Near a level</span><div class="opt-d">Price comes within the distance below of an area, after being away from it.</div></span></label>
       <label class="opt"><input type="checkbox" data-alert="breaks"${p.breaks ? ' checked' : ''}>
         <span><span class="opt-t">Through a level</span><div class="opt-d">Price moves clean through an area to the other side. Judged on the live price, not a candle close.</div></span></label>
+      <label class="opt"><input type="checkbox" data-alert="roundOnly"${p.roundOnly ? ' checked' : ''}>
+        <span><span class="opt-t">Round numbers on their own</span><div class="opt-d">Also alert on areas made only of a round number ($50 / $100 steps) with no swing zone or pivot there.</div></span></label>
       <div class="field" style="padding-top:10px">
-        <label class="lbl">Minimum strength (bars: how much history backs the level)</label>
+        <label class="lbl">Minimum rank (bars: how much history backs the level, compared with the other levels now)</label>
         <div class="seg">${STRENGTH_CHOICES.map((n) => chip('data-strength', n, `${n}+`, p.minStrength === n)).join('')}</div>
       </div>
       <div class="field">
@@ -91,18 +112,24 @@ function alertsCard() {
         <div class="seg">${DISTANCE_CHOICES.map((d) => chip('data-distance', d, d === 'auto' ? `Auto ($${auto.toFixed(1)})` : `$${d}`, p.distance === d)).join('')}</div>
       </div>
       <div id="al-recent">${lastAlertRecent}</div>
-      <p class="note" style="padding-top:10px">Alerts pause while the market is closed, the price is not live, or a candle feed has a problem. Monitoring shows a permanent notification and keeps the phone awake only while the market is open. It does not restart by itself after the phone reboots or the app is updated.</p>
+      <p class="note" style="padding-top:10px">All alerts pause while the market is closed, the price is not live or the minute candles stop updating. A level also waits while a timeframe it comes from is still loading its history, is out of date, or its feed has a problem; levels from other timeframes keep working. Monitoring shows a permanent notification and keeps the phone awake only while the market is open. It does not restart by itself after the phone reboots or the app is updated.</p>
     </div>`;
 }
 
 function statusBlock() {
   const st = store.status;
   const raw = store.raw;
+  const used = new Set(store.feeds());
   const feedLine = (k, label) => {
     const s = raw[k];
-    return `<div class="kv"><span>${label}</span><span>${s.length ? `${s.length} candles · to ${dateTime(s[s.length - 1].t)}` : 'none'}</span></div>`;
+    const what = s.length ? `${s.length} candles · to ${dateTime(s[s.length - 1].t)}` : 'none';
+    return `<div class="kv"><span>${label}</span><span>${used.has(k) ? what : 'not used (timeframe off)'}</span></div>`;
   };
   const q = store.quote;
+  const a = store.analysis;
+  const wait = store.cooldownLeft();
+  const notReady = a ? store.settings.tfs.filter((tf) => !a.ready.includes(tf) && !a.stale.includes(tf)) : [];
+  const skew = store.clockOffset;
   return `
     <div class="kv"><span>Candle source</span><span>${esc(store.provider().name)}${st.syncing ? ' · updating…' : ''}</span></div>
     <div class="kv"><span>Candles updated</span><span>${st.lastData ? clock(st.lastData) : st.fromCache ? `saved copy from ${dateTime(st.cacheSavedAt)}` : 'not yet'}</span></div>
@@ -114,7 +141,11 @@ function statusBlock() {
     ${feedLine('H1', '1 hour (builds H4 and D1)')}
     ${feedLine('D1U', 'Daily (builds W1)')}
     ${(st.errors || []).map((e) => `<div class="kv"><span>Problem</span><span>${esc(e)}</span></div>`).join('')}
-    ${store.analysis && store.analysis.stale.length ? `<div class="kv"><span>Out of date</span><span>${esc(store.analysis.stale.join(', '))}</span></div>` : ''}
+    ${wait ? `<div class="kv"><span>Rate limit</span><span>${esc(store.provider().name)} asked to wait · next request in ${wait} s</span></div>` : ''}
+    ${a && a.stale.length ? `<div class="kv"><span>Out of date</span><span>${esc(a.stale.join(', '))}</span></div>` : ''}
+    ${notReady.length ? `<div class="kv"><span>Still loading history</span><span>${esc(notReady.join(', '))}</span></div>` : ''}
+    ${a && a.gaps.length ? `<div class="kv"><span>Missing candles</span><span>${esc(a.gaps.join(', '))} (recent data has a hole)</span></div>` : ''}
+    ${skew != null && Math.abs(skew) >= 30 ? `<div class="kv"><span>Phone clock</span><span>${Math.round(skew)} s off the price server; times use the server's clock</span></div>` : ''}
     ${st.quoteError && q ? `<div class="kv"><span>Live price error</span><span>${esc(st.quoteError)}</span></div>` : ''}`;
 }
 
@@ -168,7 +199,7 @@ export function renderSettings() {
     </div>
 
     <div class="card">
-      <div class="card-h"><h2>About</h2><span>version 1.4.0</span></div>
+      <div class="card-h"><h2>About</h2><span>version 1.5.0</span></div>
       <p class="note">This app calculates support and resistance from price history. It does not give buy or sell signals and is not financial advice. Prices come from third-party feeds and can differ from your broker by a small amount.</p>
       <p class="note">Candles: Dukascopy (personal use) or Twelve Data. Live price: Swissquote public quotes. Charts: TradingView Lightweight Charts™ (Apache 2.0).</p>
     </div>`;

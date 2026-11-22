@@ -14,7 +14,34 @@ const BREAK_COOLDOWN_SEC = 300;
 // asleep) and an alert says so: the move happened while nobody was watching.
 const GAP_SEC = 600;
 
-export const ALERT_DEFAULTS = { approach: true, breaks: true, minStrength: 3, distance: 'auto' };
+// roundOnly: also alert on areas made only of round numbers. Off by default:
+// such an area is a reference price, not a level the candles made.
+export const ALERT_DEFAULTS = { approach: true, breaks: true, minStrength: 3, distance: 'auto', roundOnly: false };
+
+// Which areas may raise alerts right now, and why the others may not.
+//   ready       timeframes with enough closed, current history (model.js)
+//   badFeeds    raw feeds that failed or stopped updating
+// An area is held back when it is only round numbers (unless opted in),
+// rests on an estimated pivot, or needs a timeframe that is not ready or a
+// feed that is not working. Each area is judged on its own inputs, so one
+// broken feed pauses only the levels built from it.
+export function gateAreas(areas, { ready, badFeeds, prefs }) {
+  const p = { ...ALERT_DEFAULTS, ...prefs };
+  const readySet = new Set(ready);
+  const bad = new Set(badFeeds);
+  const allowed = [];
+  const held = [];
+  for (const a of areas) {
+    let why = null;
+    if (a.reference && !p.roundOnly) why = 'round number only';
+    else if (a.approx) why = 'estimated pivot';
+    else if (a.tfs && a.tfs.some((tf) => !readySet.has(tf))) why = 'history not ready';
+    else if (a.feeds && a.feeds.some((f) => bad.has(f))) why = 'feed problem';
+    if (why) held.push({ area: a, why });
+    else allowed.push(a);
+  }
+  return { allowed, held };
+}
 
 export function createAlertState() {
   return { tracked: [], lastPrice: null, lastAt: null };
@@ -50,6 +77,9 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs }) 
 
   for (const area of areas) {
     if (area.strength < p.minStrength) continue;
+    // Round-number-only areas are opt-in; callers normally filter with
+    // gateAreas first, this keeps the default safe on its own.
+    if (area.reference && !p.roundOnly) continue;
 
     // Areas are recalculated as candles form; carry state over to the area
     // that sits where a tracked one did.
@@ -125,7 +155,7 @@ function gapNote(a) {
 // Notification text for one alert.
 export function describeAlert(a) {
   const tags = a.area.tags.slice(0, 4).join(', ');
-  const strength = `strength ${a.area.strength}/5`;
+  const strength = a.area.reference ? 'round number' : `rank ${a.area.strength}/5`;
   if (a.kind === 'approach') {
     const where = a.distance <= 0 ? 'at the level' : `${f2(a.distance)} away`;
     return {

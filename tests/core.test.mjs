@@ -167,8 +167,20 @@ test('UTC daily feed: Sunday stub folds into Monday', () => {
 test('stitchDays keeps exact days where hourly history is complete', () => {
   const older = [1, 2, 3, 4, 5].map((d) => candle(d * 86400, 1, 1, 1, 1));
   const exact = [4, 5, 6].map((d) => candle(d * 86400, 2, 2, 2, 2));
+  // The hourly history starts partway into day 4.
+  exact[0].partial = true;
   const out = stitchDays(older, exact);
   assert.deepEqual(out.map((c) => [c.t / 86400, c.c]), [[1, 1], [2, 1], [3, 1], [4, 1], [5, 2], [6, 2]]);
+  // A first day the hourly history fully covers is used as it is.
+  delete exact[0].partial;
+  assert.deepEqual(stitchDays(older, exact).map((c) => [c.t / 86400, c.c]), [[1, 1], [2, 1], [3, 1], [4, 2], [5, 2], [6, 2]]);
+});
+
+test('stitchDays keeps the older days when no hourly day is complete (F11)', () => {
+  const older = [1, 2, 3].map((d) => candle(d * 86400, 3990, 4010, 3990, 4000));
+  const oneHour = [{ ...candle(3 * 86400, 4002, 4002.5, 4001.5, 4002), partial: true }];
+  const out = stitchDays(older, oneHour);
+  assert.deepEqual(out.map((c) => [c.l, c.h]), [[3990, 4010], [3990, 4010], [3990, 4010]]);
 });
 
 // ---- indicators ------------------------------------------------------------

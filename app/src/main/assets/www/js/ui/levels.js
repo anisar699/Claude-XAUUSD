@@ -3,7 +3,7 @@
 import { store } from '../store.js';
 import { nearestAreas } from '../core/confluence.js';
 import { distanceTo, roleOf } from '../core/sr.js';
-import { ago, biasCell, meter, px, roleBadge, signed, tagChips } from './format.js';
+import { ago, areaMeter, biasCell, meter, px, roleBadge, signed, tagChips } from './format.js';
 import { priceRow } from './overview.js';
 
 // The tab strip is built once and then only updated in place, so a focused
@@ -76,7 +76,7 @@ function areaRow(z, price, role) {
   return `<div class="row">
     ${roleBadge(role)}
     <div class="lv-main"><span class="lv-price">${px(z.price)}</span>${range}${tagChips(z.tags, 8)}</div>
-    <div class="lv-side"><div class="lv-dist">${role === 'inside' ? 'at price' : signed(dist)}</div>${meter(z.strength)}</div>
+    <div class="lv-side"><div class="lv-dist">${role === 'inside' ? 'at price' : signed(dist)}</div>${areaMeter(z)}</div>
   </div>`;
 }
 

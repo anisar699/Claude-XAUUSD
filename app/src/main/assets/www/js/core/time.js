@@ -147,3 +147,33 @@ export function marketStatus(t) {
   const guess = nextNy - nyOffsetSec(t);
   return { open, nextChange: nextNy - nyOffsetSec(guess) };
 }
+
+// A feed may open up to this late after a market closure (its session can
+// start a little after ours) without that counting as missing data.
+const LATE_OPEN_SEC = 3600;
+
+// Is the stretch between two consecutive candles (starts `prevT` and `nextT`,
+// each `step` seconds long) missing data the market actually traded?
+//
+// Expected gaps: the daily break, weekends, and holidays. Holidays are not in
+// marketStatus, but they always end at a closure: the market closes early,
+// or stays shut for the day, and reopens at the usual time. So a gap is
+// expected when the market was closed shortly before `nextT`; open-market
+// candles missing before that closure are an early close. A gap with no
+// closure just before `nextT` is a hole in the feed.
+export function unexpectedGap(prevT, nextT, step) {
+  if (nextT - prevT <= step) return false;
+  for (let s = nextT - step; s >= prevT + step; s -= step) {
+    const m = marketStatus(s);
+    if (!m.open) return nextT - m.nextChange > LATE_OPEN_SEC;
+    if (nextT - s > LATE_OPEN_SEC + step) return true;
+  }
+  return true;
+}
+
+// The first moment at or after `t`, on a `step` grid, when the market is open.
+// Used to tell whether a history starts partway into a candle period.
+export function firstOpenSlot(t, step, until) {
+  for (let s = t; s < until; s += step) if (marketStatus(s).open) return s;
+  return null;
+}

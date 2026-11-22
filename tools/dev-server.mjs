@@ -50,8 +50,13 @@ async function proxy(target, res) {
       signal: AbortSignal.timeout(20000),
     });
     const body = Buffer.from(await r.arrayBuffer());
-    // Same as AppWebClient.kt: feed answers are always served as plain text.
-    res.writeHead(r.status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    // Same as AppWebClient.kt: feed answers are always served as plain text,
+    // with only the feed's Date (as X-Upstream-Date) and Retry-After passed on.
+    // (The shared cooldown of ApiProxy.kt is not repeated here.)
+    const headers = { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
+    if (r.headers.get('date')) headers['X-Upstream-Date'] = r.headers.get('date');
+    if (r.headers.get('retry-after')) headers['Retry-After'] = r.headers.get('retry-after');
+    res.writeHead(r.status, headers);
     res.end(body);
   } catch (e) {
     res.writeHead(502, { 'Content-Type': 'text/plain' }).end(String(e.message || e));

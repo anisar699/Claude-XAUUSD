@@ -40,6 +40,10 @@ export function keyLevels(seriesByTf, now) {
       prev,
       current,
       pivots: prev ? classicPivots(prev.h, prev.l, prev.c) : null,
+      // The previous period was rebuilt from UTC days, the history starts
+      // inside it, or data is missing in it: its pivots and high / low are
+      // estimates. They are still shown, labelled, but never alerted on.
+      approx: !!(prev && (prev.approx || prev.partial || prev.gap)),
     };
   }
   return out;

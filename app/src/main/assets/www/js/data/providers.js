@@ -8,25 +8,54 @@ export function proxied(url) {
   return '/api/proxy?u=' + encodeURIComponent(url);
 }
 
-export async function fetchText(url) {
+// Seconds to wait from a Retry-After header: a number of seconds or an HTTP
+// date (judged against the server's own clock when known). Capped at an hour.
+export function parseRetryAfter(value, nowSec) {
+  if (value == null || value === '') return null;
+  const v = String(value).trim();
+  if (/^\d+$/.test(v)) return Math.min(3600, Number(v));
+  const at = Date.parse(v);
+  if (!Number.isFinite(at)) return null;
+  return Math.max(0, Math.min(3600, Math.round(at / 1000 - nowSec)));
+}
+
+// The proxy passes the feed's own Date header on as X-Upstream-Date: the
+// server's clock, so freshness does not depend on the phone's clock.
+function serverTime(res) {
+  const d = res.headers && res.headers.get ? res.headers.get('X-Upstream-Date') : null;
+  const t = d ? Date.parse(d) / 1000 : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+
+// { text, serverT }. A failed request throws an Error with `status` and,
+// when the feed (or the proxy's shared cooldown) asked for it, `retryAfter`
+// in seconds.
+export async function fetchResponse(url) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(proxied(url), { signal: ctl.signal, cache: 'no-store' });
     const text = await res.text();
+    const serverT = serverTime(res);
     if (!res.ok) {
       const err = new Error(`HTTP ${res.status}`);
       err.status = res.status;
       err.body = text.slice(0, 300);
+      const ra = res.headers && res.headers.get ? res.headers.get('Retry-After') : null;
+      err.retryAfter = parseRetryAfter(ra, serverT != null ? serverT : Date.now() / 1000);
       throw err;
     }
-    return text;
+    return { text, serverT };
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('Request timed out');
     throw e;
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function fetchText(url) {
+  return (await fetchResponse(url)).text;
 }
 
 const MIN_T = 946684800; // 2000-01-01
@@ -210,8 +239,9 @@ export function parseSwissquote(text) {
   return { bid: best.bid, ask: best.ask, t: Math.round(best.ts / 1000) };
 }
 
+// { bid, ask, t, serverT }: serverT is the server's clock when it answered
+// (null if unknown), for judging how old the quote is.
 export async function fetchQuote() {
-  return parseSwissquote(
-    await fetchText('https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD'),
-  );
+  const r = await fetchResponse('https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD');
+  return { ...parseSwissquote(r.text), serverT: r.serverT };
 }

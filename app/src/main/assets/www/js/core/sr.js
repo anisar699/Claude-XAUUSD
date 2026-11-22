@@ -9,6 +9,9 @@
 // 5. Draw each zone as a narrow band around its centre, not across the whole
 //    spread of the swings that formed it.
 //
+// Only closed candles may be passed in (model.js drops the forming one), so a
+// zone cannot appear or vanish while a candle is still moving.
+//
 // The per-timeframe settings below were chosen with tools/sr-backtest.mjs
 // (walk-forward test on two years of hourly and nine years of daily gold
 // data; README has the numbers). For M5 to H4, centring on the densest swing,
@@ -40,9 +43,16 @@ const MAJOR_WEIGHT = 2.5;
 const MAX_ZONES = 14;
 const MIN_RATIO = 0.1;
 
+// A swing is judged on 2k+1 consecutive candles. If data is missing anywhere
+// in that window (a feed hole, or a period the history starts partway into),
+// the candles are not really neighbours and the swing is not counted.
 export function findSwings(c, k) {
   const out = [];
+  const bad = new Array(c.length + 1);
+  bad[0] = 0;
+  for (let i = 0; i < c.length; i++) bad[i + 1] = bad[i] + (c[i].gap || c[i].partial ? 1 : 0);
   for (let i = k; i < c.length - k; i++) {
+    if (bad[i + k + 1] - bad[i - k] > 0) continue;
     let isHigh = true;
     let isLow = true;
     for (let j = 1; j <= k && (isHigh || isLow); j++) {

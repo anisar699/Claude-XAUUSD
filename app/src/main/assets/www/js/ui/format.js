@@ -52,6 +52,13 @@ export function meter(n) {
   return `<span class="meter" role="img" aria-label="Strength ${n} of 5">${bars}</span>`;
 }
 
+// A multi-timeframe area: a round number on its own is a reference price, not
+// ranked; an area resting on an estimated pivot says so.
+export function areaMeter(z) {
+  if (z.reference) return '<span class="lv-ref">round number</span>';
+  return meter(z.strength) + (z.approx ? '<span class="lv-ref">estimated pivot</span>' : '');
+}
+
 const ARROW = {
   bull: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 1l4.5 8h-9z"/></svg>',
   bear: '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M5 9L.5 1h9z"/></svg>',

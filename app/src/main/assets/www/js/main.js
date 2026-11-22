@@ -62,7 +62,7 @@ function renderHeader() {
 
   const upd = $('upd');
   if (store.priceIsLive()) upd.textContent = `Live · ${clock(store.quote.at)}`;
-  else if (a) upd.textContent = `Last · ${dayTime(a.lastT)}`;
+  else if (a) upd.textContent = `Last · ${dayTime(a.lastAt)}`;
   else upd.textContent = '';
 }
 

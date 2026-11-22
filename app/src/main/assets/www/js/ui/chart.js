@@ -4,8 +4,8 @@ import { store } from '../store.js';
 import { ema } from '../core/indicators.js';
 import { roleOf } from '../core/sr.js';
 import { nearestAreas } from '../core/confluence.js';
-import { bucketEnd, serverOffsetSec } from '../core/time.js';
-import { px } from './format.js';
+import { serverOffsetSec } from '../core/time.js';
+import { esc, px } from './format.js';
 
 const LC = window.LightweightCharts;
 
@@ -39,10 +39,10 @@ let lineItems = []; // { opts, line, labeled }
 let lineSignature = '';
 let scaleHint = null; // nearest drawn level on each side of price
 let declutterQueued = false;
-let shown = null; // { tf, firstT, lastT, len }
+let shown = null; // { tf, firstT, lastT, len, source }
 let lastBars = []; // chart-time bars currently loaded
-let lastCandle = null; // the newest candle, in feed time
-let liveBar = null; // the newest candle as drawn, including live-quote extremes
+let lastGap = false; // the newest candle has missing data in it
+let liveLine = null; // the live quote, drawn as its own line
 let hoverText = null;
 
 // Intraday candles are shown in the phone's local time. Daily and weekly
@@ -87,17 +87,25 @@ function ensureChart() {
     wickUpColor: C.up,
     wickDownColor: C.down,
     borderVisible: false,
-    priceLineColor: C.accent,
+    // The candles are the candle feed's own; the live quote (another feed) is
+    // drawn as a separate "Live" line instead of being written into them.
+    priceLineVisible: false,
     priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     // Stretch the price scale so the next level on each side of price is on
     // screen, unless that would squash the candles.
     autoscaleInfoProvider: (original) => {
       const res = original();
-      if (!res || !res.priceRange || !scaleHint) return res;
+      if (!res || !res.priceRange || (!scaleHint && !liveLine)) return res;
       let { minValue, maxValue } = res.priceRange;
+      // The live price is always on screen.
+      if (liveLine) {
+        const p = liveLine.options().price;
+        minValue = Math.min(minValue, p);
+        maxValue = Math.max(maxValue, p);
+      }
       const reach = (maxValue - minValue) * 0.6;
-      if (scaleHint.below != null && scaleHint.below < minValue && minValue - scaleHint.below <= reach) minValue = scaleHint.below;
-      if (scaleHint.above != null && scaleHint.above > maxValue && scaleHint.above - maxValue <= reach) maxValue = scaleHint.above;
+      if (scaleHint && scaleHint.below != null && scaleHint.below < minValue && minValue - scaleHint.below <= reach) minValue = scaleHint.below;
+      if (scaleHint && scaleHint.above != null && scaleHint.above > maxValue && scaleHint.above - maxValue <= reach) maxValue = scaleHint.above;
       return { ...res, priceRange: { minValue, maxValue } };
     },
   });
@@ -154,14 +162,22 @@ function ohlcText(b) {
 function renderLegend() {
   const el = root.querySelector('#chart-legend');
   const tf = store.settings.chartTf;
-  const last = liveBar || lastBars[lastBars.length - 1];
-  const ohlc = hoverText || (last ? ohlcText(last) : '');
+  if (!lastBars.length) {
+    el.innerHTML = `<b>${tf}</b>`;
+    return;
+  }
+  const last = lastBars[lastBars.length - 1];
+  const ohlc = hoverText || ohlcText(last);
   let extra = '';
   const t = store.analysis && store.analysis.trend[tf];
   if (store.settings.chartLayers.ema && t) {
     extra = `<br>EMA 50 <b>${px(t.ema50)}</b> (solid) · EMA 200 <b>${px(t.ema200)}</b> (dashed)`;
   }
-  el.innerHTML = `<b>${tf}</b> ${ohlc}${extra}`;
+  // Say where each number comes from: candles from the candle feed, the
+  // dashed Live line from the quote feed.
+  const live = store.priceIsLive() ? ` · Live line: Swissquote bid <b>${px(store.quote.bid)}</b>` : '';
+  const gap = lastGap && !hoverText ? ' · <span class="warn">data missing in this candle</span>' : '';
+  el.innerHTML = `<b>${tf}</b> ${ohlc}${extra}<br><span class="src">${esc(store.provider().name)} bid candles${live}${gap}</span>`;
 }
 
 let chipSignature = '';
@@ -186,8 +202,9 @@ const sameBar = (a, b) => a.time === b.time && a.open === b.open && a.high === b
 function setCandles(tf, candles) {
   const bars = toBars(tf, candles);
   const n = bars.length;
+  const source = store.settings.source;
   const sameShape =
-    shown && shown.tf === tf && n >= shown.len && shown.len > 0 && bars[0].time === shown.firstT && bars[shown.len - 1].time === shown.lastT;
+    shown && shown.tf === tf && shown.source === source && n >= shown.len && shown.len > 0 && bars[0].time === shown.firstT && bars[shown.len - 1].time === shown.lastT;
   if (sameShape) {
     // The feed can correct older candles; redraw from the first one that changed.
     let from = shown.len - 1;
@@ -209,19 +226,9 @@ function setCandles(tf, candles) {
     candleSeries.setData(bars);
     if (tfChanged && n) chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 110), to: n + 6 });
   }
-  shown = n ? { tf, firstT: bars[0].time, lastT: bars[n - 1].time, len: n } : null;
+  shown = n ? { tf, firstT: bars[0].time, lastT: bars[n - 1].time, len: n, source } : null;
   lastBars = bars;
-  lastCandle = candles.length ? { tf, t: candles[candles.length - 1].t } : null;
-
-  // The candle on screen keeps every high and low seen from live quotes during
-  // its period, even when a feed update arrives without them.
-  const lastBar = bars[n - 1];
-  if (lastBar && liveBar && liveBar.tf === tf && liveBar.time === lastBar.time) {
-    liveBar = { ...lastBar, tf, high: Math.max(lastBar.high, liveBar.high), low: Math.min(lastBar.low, liveBar.low) };
-    if (liveBar.high !== lastBar.high || liveBar.low !== lastBar.low) candleSeries.update(barOf(liveBar));
-  } else {
-    liveBar = lastBar ? { ...lastBar, tf } : null;
-  }
+  lastGap = !!(candles.length && candles[candles.length - 1].gap);
 
   const on = !!store.settings.chartLayers.ema;
   ema50Series.applyOptions({ visible: on });
@@ -234,7 +241,41 @@ function setCandles(tf, candles) {
   }
 }
 
-const barOf = (b) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close });
+// No candles for this timeframe or feed (yet): take everything off the chart
+// so nothing from another timeframe or feed is shown as if it were this one.
+function clearChart() {
+  if (!chart) return;
+  candleSeries.setData([]);
+  ema50Series.setData([]);
+  ema200Series.setData([]);
+  for (const it of lineItems) candleSeries.removePriceLine(it.line);
+  lineItems = [];
+  lineSignature = '';
+  scaleHint = null;
+  if (liveLine) candleSeries.removePriceLine(liveLine);
+  liveLine = null;
+  shown = null;
+  lastBars = [];
+  lastGap = false;
+  hoverText = null;
+}
+
+// The live quote as its own dashed line, only while it is live.
+function syncLiveLine() {
+  if (!chart) return;
+  const live = store.priceIsLive() && lastBars.length;
+  if (!live) {
+    if (liveLine) candleSeries.removePriceLine(liveLine);
+    liveLine = null;
+    return;
+  }
+  const price = store.quote.bid;
+  if (!liveLine) {
+    liveLine = candleSeries.createPriceLine({ price, color: C.accent, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: 'Live' });
+  } else {
+    liveLine.applyOptions({ price });
+  }
+}
 
 function desiredLines(a, tf, price) {
   const L = store.settings.chartLayers;
@@ -302,6 +343,8 @@ export function renderChart() {
   const candles = a ? a.series[tf] : null;
   const empty = root.querySelector('#chart-empty');
   if (!candles || !candles.length) {
+    clearChart();
+    if (chart) renderLegend();
     empty.hidden = false;
     empty.textContent = store.status.syncing ? 'Loading candles…' : 'No candles for this timeframe yet.';
     return;
@@ -311,24 +354,15 @@ export function renderChart() {
   // Lines first: they set the price-scale hint the candles are then fitted to.
   syncLines(a, tf, store.price());
   setCandles(tf, candles);
-  nudgeLive();
+  syncLiveLine();
   renderLegend();
 }
 
-// Between candle refreshes, move the last candle's close with the live quote.
-function nudgeLive() {
-  if (!chart || !liveBar || !lastCandle || !store.priceIsLive()) return;
-  if (Date.now() / 1000 >= bucketEnd(lastCandle.tf, lastCandle.t)) return; // a new candle has not arrived yet
-  const p = store.price();
-  liveBar = { ...liveBar, high: Math.max(liveBar.high, p), low: Math.min(liveBar.low, p), close: p };
-  candleSeries.update(barOf(liveBar));
-}
-
 export function onChartQuote() {
-  if (!root || root.hidden || !chart) return;
+  if (!root || root.hidden || !chart || !lastBars.length) return;
   const a = store.analysis;
   if (a) syncLines(a, store.settings.chartTf, store.price());
-  nudgeLive();
+  syncLiveLine();
   renderLegend();
 }
 
@@ -350,9 +384,10 @@ export function initChart(el) {
   });
 }
 
-// For tests: the candles as the chart library holds them, newest last.
+// For tests: the candles as the chart library holds them, newest last, and
+// the live line's price (null when not drawn).
 export function __debug() {
   if (!candleSeries) return null;
   const bars = candleSeries.data();
-  return { ...bars[bars.length - 1], bars };
+  return { ...bars[bars.length - 1], bars, live: liveLine ? liveLine.options().price : null };
 }

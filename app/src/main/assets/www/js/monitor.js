@@ -6,19 +6,21 @@
 // relies on page timers, which a windowless WebView may throttle.
 
 import { store } from './store.js';
-import { createAlertState, describeAlert, evaluateAlerts } from './core/alerts.js';
+import { createAlertState, describeAlert, evaluateAlerts, gateAreas } from './core/alerts.js';
 import { nearestAreas } from './core/confluence.js';
 import { marketStatus } from './core/time.js';
 import { appendAlerts } from './data/alertlog.js';
 
 // Provided by MonitorService: status(text) updates the ongoing notification,
-// alert(title, body, key) posts an alert notification.
+// alert(title, body, key) posts an alert notification, heartbeat(state)
+// tells the service the page is alive and what it is doing.
 const bridge = window.AndroidMonitor || null;
 const state = createAlertState();
 const nowSec = () => Math.floor(Date.now() / 1000);
 const px = (v) => v.toFixed(2);
 
-// Newest one-minute candle older than this (seconds) = data not updating.
+// The minute candles are the shared input of every timeframe: older than
+// this (seconds) while the market is open = data not updating.
 const STALE_CANDLES_SEC = 420;
 let lastStatus = '';
 
@@ -26,6 +28,24 @@ function setStatus(text) {
   if (text === lastStatus) return;
   lastStatus = text;
   if (bridge) bridge.status(text);
+}
+
+// One of: running (checking levels), warmup (history still loading),
+// paused (market closed or no usable data), with the reason in the status.
+let lastBeat = { kind: '', at: 0 };
+function beat(kind) {
+  const now = Date.now();
+  if (kind === lastBeat.kind && now - lastBeat.at < 10000) return;
+  lastBeat = { kind, at: now };
+  if (bridge && bridge.heartbeat) bridge.heartbeat(kind);
+}
+
+// When the newest minute candle is known to be from (seconds), or null.
+function minuteAt(t) {
+  const m = store.raw.M1;
+  if (!m || !m.length) return null;
+  const c = m[m.length - 1];
+  return Math.min(t, c.t + 60, c.asOf != null ? c.asOf : Infinity);
 }
 
 // Whole dollars, so the ongoing notification does not redraw on every tick.
@@ -48,24 +68,40 @@ function reportMarket(m) {
   bridge.marketState(m.open, m.nextChange * 1000);
 }
 
+function paused(text, kind = 'paused') {
+  beat(kind);
+  setStatus(text);
+}
+
 function evaluate() {
   const t = nowSec();
   const m = marketStatus(t);
   reportMarket(m);
   const a = store.analysis;
-  if (!a) return setStatus(store.status.error ? 'Cannot load market data · retrying' : 'Loading market data…');
-  // Alerts need a live price and current candles. Without both, say so rather
-  // than judge levels against old numbers.
-  if (!m.open) return setStatus(`Market closed · last ${px(a.lastPrice)} · alerts paused`);
-  if (!store.priceIsLive()) return setStatus('No live price · alerts paused');
-  if (t - a.lastT > STALE_CANDLES_SEC) return setStatus('Candles not updating · alerts paused');
-  if (a.stale.length) return setStatus(`${a.stale.join(', ')} candles out of date · alerts paused`);
-  // A feed that failed leaves its timeframes with old or missing candles.
-  if (store.status.errors.length) return setStatus(`Data problem (${store.status.errors[0]}) · alerts paused`);
+  if (!a) return paused(store.status.error ? 'Cannot load market data · retrying' : 'Loading market data…', 'warmup');
+  // Alerts need a live price and current minute candles. Without both, say
+  // so rather than judge levels against old numbers.
+  if (!m.open) return paused(`Market closed · last ${px(a.lastPrice)} · alerts paused`);
+  if (!store.priceIsLive()) return paused('No live price · alerts paused');
+  const m1 = minuteAt(t);
+  if (m1 == null || t - m1 > STALE_CANDLES_SEC) return paused('Candles not updating · alerts paused');
+
+  // Each area is judged on its own inputs: a timeframe still loading its
+  // history, out of date, or whose feed failed holds back only the areas
+  // built from it.
+  const enabled = store.settings.tfs;
+  const ready = a.ready.filter((tf) => !a.gaps.includes(tf));
+  const badFeeds = store.failedFeeds();
+  if (!ready.length) {
+    return paused(badFeeds.length ? `Data problem (${store.status.errors[0]}) · alerts paused` : 'Loading history · alerts start when it is ready', badFeeds.length ? 'paused' : 'warmup');
+  }
+  const { allowed } = gateAreas(a.conf, { ready, badFeeds, prefs: store.settings.alerts });
 
   const price = store.price();
-  const alerts = evaluateAlerts(state, { now: t, price, areas: a.conf, tol: a.tol, atrH1: a.atrH1, prefs: store.settings.alerts });
-  setStatus(summary(a, price));
+  const alerts = evaluateAlerts(state, { now: t, price, areas: allowed, tol: a.tol, atrH1: a.atrH1, prefs: store.settings.alerts });
+  const waiting = enabled.filter((tf) => !ready.includes(tf));
+  beat('running');
+  setStatus(summary(a, price) + (waiting.length ? ` · ${waiting.join(', ')} not ready` : ''));
   if (!alerts.length) return;
 
   const texts = alerts.map(describeAlert);

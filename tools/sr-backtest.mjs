@@ -8,15 +8,30 @@
 //                   within 0.3 ATR of the zone centre
 //   capture         of the real turning points, the share within 0.3 ATR of
 //                   some zone marked beforehand
-//   reaction        of the zones price reached, the share where price moved
+//   reaction        of the zones price touched, the share where price moved
 //                   1 ATR back before a candle closed through them
 //
-// Each is compared with random lines (same count, same widths, within the
-// same distance of price) scored by the same rules, because some lines
-// "work" by chance. Only zones within 6 ATR of price take part.
+// Each is compared with random bands scored by the same rules, because some
+// lines "work" by chance. Only zones within 6 ATR of price take part.
+//
+// Scoring rules since 1.5 (after the 1.4.0 developer audit, F08):
+//  - Real and random levels are scored on the same test points: a point with
+//    no zone within 6 ATR counts for neither.
+//  - The main control ("matched") gives each real zone random twins on the
+//    same side of price, with the same width and with their near edge in the
+//    same 0.5 ATR distance band. The older control ("uniform": anywhere within
+//    6 ATR) is still reported, for comparison with earlier results.
+//  - Everything scored stays inside the H candles after the test point: a
+//    turning point needs its whole right-hand wing and its 1.5 ATR move there.
+//  - Equal highs (or lows) next to each other are one turning point.
+//  - A touch is a candle that trades inside the band; a candle that jumps past
+//    it without trading there is a "jump", not a touch.
+//  - Lifts are also worked out per block of consecutive test points (8 per
+//    part); the +- is the standard error across those blocks.
 //
 // The test points are split by time: settings are chosen on the first 60%
-// ("tune") and checked on the last 40% ("check").
+// ("tune") and checked on the last 40% ("check"); the test point just before
+// the split is left out, so no scored candle is shared between the parts.
 //
 //   node tools/sr-backtest.mjs --fetch <dir>      download history (Dukascopy)
 //   node tools/sr-backtest.mjs <dir> [variants]   run; variants: comma list or "all"
@@ -25,7 +40,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { aggregateTf, utcDaysToServerDays } from '../app/src/main/assets/www/js/core/candles.js';
+import { aggregateTf, markGaps, utcDaysToServerDays } from '../app/src/main/assets/www/js/core/candles.js';
 import { atr } from '../app/src/main/assets/www/js/core/indicators.js';
 import { computeZones, ZONES_V1 } from '../app/src/main/assets/www/js/core/sr.js';
 import { analyse } from '../app/src/main/assets/www/js/core/model.js';
@@ -76,25 +91,31 @@ export function load(dir, tf) {
 
 // ---- scoring ------------------------------------------------------------------
 
+export const BIN = 0.5; // ATR: distance bands for the matched control
+export const BLOCKS = 8;
+
 let seed = 7;
 export const setSeed = (x) => (seed = x);
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296);
 
+// Turning points in the H candles after test point i. The right-hand wing and
+// the confirming move must both lie inside that window; a flat top or bottom
+// counts once.
 export function turningPoints(c, i, H, A) {
   const out = [];
-  const end = Math.min(c.length - 1 - SWING_K, i + H);
-  for (let k = Math.max(i + 1, SWING_K); k <= end; k++) {
+  const end = Math.min(c.length - 1, i + H);
+  for (let k = Math.max(i + 1, SWING_K); k + SWING_K <= end; k++) {
     let hi = true;
     let lo = true;
     for (let d = 1; d <= SWING_K; d++) {
-      if (c[k - d].h > c[k].h || c[k + d].h > c[k].h) hi = false;
-      if (c[k - d].l < c[k].l || c[k + d].l < c[k].l) lo = false;
+      if (c[k - d].h >= c[k].h || c[k + d].h > c[k].h) hi = false;
+      if (c[k - d].l <= c[k].l || c[k + d].l < c[k].l) lo = false;
     }
-    const after = c.slice(k + 1, k + 13);
+    const after = c.slice(k + 1, Math.min(k + 13, end + 1));
     if (hi && after.some((x) => x.l <= c[k].h - SWING_MOVE * A)) out.push(c[k].h);
     if (lo && after.some((x) => x.h >= c[k].l + SWING_MOVE * A)) out.push(c[k].l);
   }
-  return out;
+  return [...new Set(out.map((x) => Math.round(x * 100) / 100))];
 }
 
 export function reached(c, i, H, m, A) {
@@ -103,72 +124,107 @@ export function reached(c, i, H, m, A) {
   return false;
 }
 
+// 'held', 'broke', 'jump' (price went past without trading in the band) or
+// null (not touched, or undecided within the window).
 export function reaction(c, i, H, A, lo, hi) {
   const p = c[i].c;
-  const mid = (lo + hi) / 2;
   if (p >= lo && p <= hi) return null;
-  const res = mid > p;
+  const res = lo > p;
+  const mid = (lo + hi) / 2;
   const end = Math.min(c.length - 1, i + H);
   let touch = -1;
-  for (let j = i + 1; j <= end && touch < 0; j++) if (res ? c[j].h >= lo : c[j].l <= hi) touch = j;
+  for (let j = i + 1; j <= end; j++) {
+    const x = c[j];
+    if (x.l <= hi && x.h >= lo) {
+      touch = j;
+      break;
+    }
+    if (res ? x.l > hi : x.h < lo) return 'jump';
+  }
   if (touch < 0) return null;
-  for (let j = touch; j <= Math.min(c.length - 1, touch + H); j++) {
+  for (let j = touch; j <= end; j++) {
     if (res ? c[j].c > hi : c[j].c < lo) return 'broke';
     if (j > touch && (res ? c[j].l <= mid - REVERSAL * A : c[j].h >= mid + REVERSAL * A)) return 'held';
   }
   return null;
 }
 
+// A random twin of zone z for price p: same side, same width, near edge in
+// the same 0.5 ATR distance band. A zone around price gets a twin around price.
+export function matchedBand(z, p, A) {
+  const w = z.hi - z.lo;
+  if (p >= z.lo && p <= z.hi) {
+    const lo = p - rnd() * w;
+    return { m: lo + w / 2, lo, hi: lo + w };
+  }
+  const above = z.lo > p;
+  const d = above ? z.lo - p : p - z.hi;
+  const band = Math.floor(d / (BIN * A));
+  const d2 = (band + rnd()) * BIN * A;
+  const lo = above ? p + d2 : p - d2 - w;
+  return { m: lo + w / 2, lo, hi: lo + w };
+}
+
+function uniformBand(z, p, A) {
+  const m = p + (rnd() * 2 - 1) * BAND * A;
+  const half = (z.hi - z.lo) / 2;
+  return { m, lo: m - half, hi: m + half };
+}
+
+const acc = () => ({ reach: 0, hit: 0, tps: 0, cap: 0, react: 0, held: 0, jump: 0 });
+
+function addInto(t, r) {
+  for (const k of Object.keys(r)) t[k] += r[k];
+}
+
 export function tally() {
-  return { n: 0, lv: 0, w: 0, hit: 0, reach: 0, rHit: 0, rReach: 0, tps: 0, cap: 0, rCap: 0, rTps: 0, held: 0, react: 0, rHeld: 0, rReact: 0, byS: {} };
+  return { windows: 0, empty: 0, n: 0, lv: 0, w: 0, real: acc(), matched: acc(), uniform: acc(), byS: {}, log: [] };
+}
+
+// Score bands (each {m, lo, hi, s?}) on the window after test point i.
+function scoreBands(into, c, i, H, A, bands, tps, weight, byS) {
+  for (const b of bands) {
+    if (reached(c, i, H, b.m, A)) {
+      into.reach += weight;
+      const hit = tps.some((x) => Math.abs(x - b.m) <= NEAR * A);
+      if (hit) into.hit += weight;
+      if (byS && b.s) {
+        const e = (byS[b.s] ||= { reach: 0, hit: 0 });
+        e.reach++;
+        if (hit) e.hit++;
+      }
+    }
+    const r = reaction(c, i, H, A, b.lo, b.hi);
+    if (r === 'jump') into.jump += weight;
+    else if (r) {
+      into.react += weight;
+      if (r === 'held') into.held += weight;
+    }
+  }
+  into.tps += tps.length * weight;
+  for (const x of tps) if (bands.some((b) => Math.abs(b.m - x) <= NEAR * A)) into.cap += weight;
 }
 
 export function score(T, c, i, H, A, zones) {
+  T.windows++;
   const p = c[i].c;
   const near = zones.filter((z) => Math.abs(z.price - p) <= BAND * A);
-  const tps = turningPoints(c, i, H, A);
+  if (!near.length) {
+    T.empty++;
+    return;
+  }
   T.n++;
   T.lv += near.length;
-  const levelScore = (m, lo, hi, into, s) => {
-    if (reached(c, i, H, m, A)) {
-      into.reach++;
-      const hit = tps.some((x) => Math.abs(x - m) <= NEAR * A);
-      if (hit) into.hit++;
-      if (s) {
-        const b = (T.byS[s] ||= { reach: 0, hit: 0 });
-        b.reach++;
-        if (hit) b.hit++;
-      }
-    }
-    const r = reaction(c, i, H, A, lo, hi);
-    if (r) {
-      into.react++;
-      if (r === 'held') into.held++;
-    }
-  };
-  for (const z of near) {
-    T.w += (z.hi - z.lo) / A;
-    levelScore(z.price, z.lo, z.hi, T, z.strength);
-  }
-  T.tps += tps.length;
-  for (const x of tps) if (near.some((z) => Math.abs(z.price - x) <= NEAR * A)) T.cap++;
-
-  if (!near.length) return;
-  const R = { hit: 0, reach: 0, held: 0, react: 0 };
+  for (const z of near) T.w += (z.hi - z.lo) / A;
+  const tps = turningPoints(c, i, H, A);
+  const row = { real: acc(), matched: acc(), uniform: acc() };
+  scoreBands(row.real, c, i, H, A, near.map((z) => ({ m: z.price, lo: z.lo, hi: z.hi, s: z.strength })), tps, 1, T.byS);
   for (let k = 0; k < TRIALS; k++) {
-    const fake = near.map((z) => {
-      const m = p + (rnd() * 2 - 1) * BAND * A;
-      const half = (z.hi - z.lo) / 2;
-      return { m, lo: m - half, hi: m + half };
-    });
-    for (const f of fake) levelScore(f.m, f.lo, f.hi, R, 0);
-    for (const x of tps) if (fake.some((f) => Math.abs(f.m - x) <= NEAR * A)) T.rCap++;
-    T.rTps += tps.length;
+    scoreBands(row.matched, c, i, H, A, near.map((z) => matchedBand(z, p, A)), tps, 1 / TRIALS);
+    scoreBands(row.uniform, c, i, H, A, near.map((z) => uniformBand(z, p, A)), tps, 1 / TRIALS);
   }
-  T.rHit += R.hit;
-  T.rReach += R.reach;
-  T.rHeld += R.held;
-  T.rReact += R.react;
+  for (const k of ['real', 'matched', 'uniform']) addInto(T[k], row[k]);
+  T.log.push(row);
 }
 
 // ---- variants -------------------------------------------------------------------
@@ -182,8 +238,10 @@ export const VARIANTS = {
 export const PLAN = { M5: { warm: 600, H: 72 }, M15: { warm: 500, H: 64 }, H1: { warm: 500, H: 48 }, H4: { warm: 380, H: 24 }, D1: { warm: 320, H: 10 }, W1: { warm: 170, H: 6 } };
 
 export function run(dir, names, opts = {}) {
-  const series = { M5: load(dir, 'M5'), M15: load(dir, 'M15'), H1: load(dir, 'H1') };
-  series.H4 = aggregateTf(series.H1, 'H4');
+  // Holes in the feed are marked as the app marks them, so swings next to one
+  // are skipped here too.
+  const series = { M5: markGaps(load(dir, 'M5'), 300), M15: markGaps(load(dir, 'M15'), 900), H1: markGaps(load(dir, 'H1'), 3600) };
+  series.H4 = aggregateTf(series.H1, 'H4', 3600);
   // The feed's daily candles roll at UTC midnight; rebuild them on New York
   // close days the way the app does for history older than its hourly data.
   series.D1 = utcDaysToServerDays(load(dir, 'D1'));
@@ -203,6 +261,7 @@ export function run(dir, names, opts = {}) {
       const variant = { ...v, ...(v.byTf?.[tf] || {}) };
       const parts = { tune: tally(), check: tally() };
       idx.forEach((i, k) => {
+        if (k === cut - 1) return; // the gap between the parts
         seed = 7 + k; // same random lines for every variant at a test point
         score(k < cut ? parts.tune : parts.check, c, i, H, A[i], computeZones(c.slice(0, i + 1), tf, variant));
       });
@@ -232,6 +291,7 @@ export function runAreas(dir) {
   for (const [name, setup] of Object.entries(setups)) {
     const parts = { tune: tally(), check: tally() };
     idx.forEach((i, k) => {
+      if (k === cut - 1) return; // the gap between the parts
       const now = h1[i].t + 3600;
       const raw = { H1: h1.slice(0, i + 1), D1U: days.filter((d) => d.t + 86400 <= now) };
       const a = analyse(raw, { now, tfs: ['H1', 'H4', 'D1', 'W1'], ...setup });
@@ -246,18 +306,53 @@ export function runAreas(dir) {
 
 const pc = (a, b) => (b ? (100 * a) / b : NaN);
 const f0 = (x) => (Number.isFinite(x) ? x.toFixed(0) : '-');
+const sg = (x) => (Number.isFinite(x) ? (x >= 0 ? '+' : '') + x.toFixed(1) : '-');
 
+// Standard error of a lift across blocks of consecutive test points.
+function blockSE(log, metric) {
+  const B = Math.min(BLOCKS, log.length);
+  if (B < 2) return NaN;
+  const lifts = [];
+  for (let b = 0; b < B; b++) {
+    const rows = log.slice(Math.round((b * log.length) / B), Math.round(((b + 1) * log.length) / B));
+    const r = acc();
+    const m = acc();
+    for (const row of rows) {
+      addInto(r, row.real);
+      addInto(m, row.matched);
+    }
+    const lift = metric(r) - metric(m);
+    if (Number.isFinite(lift)) lifts.push(lift);
+  }
+  if (lifts.length < 2) return NaN;
+  const mean = lifts.reduce((a, b) => a + b, 0) / lifts.length;
+  const sd = Math.sqrt(lifts.reduce((a, b) => a + (b - mean) ** 2, 0) / (lifts.length - 1));
+  return sd / Math.sqrt(lifts.length);
+}
+
+const turnOf = (x) => pc(x.hit, x.reach);
+const captureOf = (x) => pc(x.cap, x.tps);
+const reactionOf = (x) => pc(x.held, x.react);
+
+// turnRandom / captureRandom / reactionRandom are the matched control.
 export function summarise(t) {
   return {
-    levels: t.lv / t.n,
+    tests: t.n,
+    empty: t.empty,
+    levels: t.n ? t.lv / t.n : 0,
     width: t.lv ? t.w / t.lv : 0,
-    turn: pc(t.hit, t.reach),
-    turnRandom: pc(t.rHit, t.rReach),
-    capture: pc(t.cap, t.tps),
-    captureRandom: pc(t.rCap, t.rTps),
-    reaction: pc(t.held, t.react),
-    reactionRandom: pc(t.rHeld, t.rReact),
-    reached: t.reach,
+    turn: turnOf(t.real),
+    turnRandom: turnOf(t.matched),
+    turnUniform: turnOf(t.uniform),
+    turnSE: blockSE(t.log, turnOf),
+    capture: captureOf(t.real),
+    captureRandom: captureOf(t.matched),
+    captureUniform: captureOf(t.uniform),
+    captureSE: blockSE(t.log, captureOf),
+    reaction: reactionOf(t.real),
+    reactionRandom: reactionOf(t.matched),
+    jumps: t.real.jump,
+    reached: t.real.reach,
   };
 }
 
@@ -265,23 +360,28 @@ function print(results, names) {
   for (const [tf, r] of Object.entries(results)) {
     names = names || Object.keys(r).filter((k) => r[k].tune);
     console.log(`\n=== ${tf}  ${r.tests} test points, tune/check split at ${new Date(r.cutT * 1000).toISOString().slice(0, 10)}`);
-    console.log('variant'.padEnd(20), 'part  ', 'lvl', ' width', '| turn  rnd  lift', '| capture rnd lift', '| react  rnd');
+    console.log('variant'.padEnd(20), 'part  ', ' pts', 'lvl', ' width', '| turn  mtch  lift +-se   unif', '| capture mtch  lift +-se   unif', '| react mtch');
     for (const name of names) {
       for (const part of ['tune', 'check']) {
         const s = summarise(r[name][part]);
         console.log(
           (part === 'tune' ? name : '').padEnd(20),
           part.padEnd(6),
+          String(s.tests).padStart(4),
           s.levels.toFixed(1).padStart(4),
           s.width.toFixed(2).padStart(5),
           '|',
           f0(s.turn).padStart(4),
-          f0(s.turnRandom).padStart(4),
-          ((s.turn - s.turnRandom >= 0 ? '+' : '') + f0(s.turn - s.turnRandom)).padStart(5),
+          f0(s.turnRandom).padStart(5),
+          sg(s.turn - s.turnRandom).padStart(5),
+          f0(s.turnSE).padStart(3),
+          sg(s.turn - s.turnUniform).padStart(6),
           '|',
           f0(s.capture).padStart(5),
-          f0(s.captureRandom).padStart(4),
-          ((s.capture - s.captureRandom >= 0 ? '+' : '') + f0(s.capture - s.captureRandom)).padStart(5),
+          f0(s.captureRandom).padStart(5),
+          sg(s.capture - s.captureRandom).padStart(5),
+          f0(s.captureSE).padStart(3),
+          sg(s.capture - s.captureUniform).padStart(6),
           '|',
           f0(s.reaction).padStart(5),
           f0(s.reactionRandom).padStart(4),

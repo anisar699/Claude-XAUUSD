@@ -1,36 +1,66 @@
 // Turns raw feed candles into everything the screens show. Pure: no network,
 // storage or DOM, so it runs the same in the app and in tests.
 
-import { aggregateTf, extendWith, stitchDays, utcDaysToServerDays } from './candles.js';
-import { bucketOf } from './time.js';
+import { aggregateTf, extendWith, markGaps, stitchDays, utcDaysToServerDays } from './candles.js';
+import { bucketEnd, bucketOf } from './time.js';
 import { atr, lastValue, trendOf } from './indicators.js';
 import { computeZones } from './sr.js';
 import { keyLevels } from './pivots.js';
 import { buildLevelPool, confluence } from './confluence.js';
 
+// Candle length of each raw intraday feed, for finding holes in it.
+const FEED_STEP = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600 };
+
 // raw: { M1, M5, M15, M30, H1, D1U } where D1U is the feed's UTC-midnight
 // daily series. H4 and D1 are rebuilt from hourly candles on New-York-close
 // boundaries; W1 and MN from those days.
 export function buildSeries(raw) {
-  const M1 = raw.M1 || [];
-  const M5 = extendWith(raw.M5 || [], M1, 'M5');
-  const M15 = extendWith(raw.M15 || [], M1, 'M15');
-  const M30 = extendWith(raw.M30 || [], M1, 'M30');
-  const H1 = extendWith(raw.H1 || [], M1, 'H1');
-  const H4 = aggregateTf(H1, 'H4');
-  const D1 = stitchDays(utcDaysToServerDays(raw.D1U || []), aggregateTf(H1, 'D1'));
+  const g = {};
+  for (const [feed, step] of Object.entries(FEED_STEP)) g[feed] = markGaps(raw[feed] || [], step, feed === 'M1' ? 300 : step);
+  const M1 = g.M1;
+  const M5 = extendWith(g.M5, M1, 'M5');
+  const M15 = extendWith(g.M15, M1, 'M15');
+  const M30 = extendWith(g.M30, M1, 'M30');
+  const H1 = extendWith(g.H1, M1, 'H1');
+  const H4 = aggregateTf(H1, 'H4', 3600);
+  const D1 = stitchDays(utcDaysToServerDays(raw.D1U || []), aggregateTf(H1, 'D1', 3600));
   const W1 = aggregateTf(D1, 'W1');
   const MN = aggregateTf(D1, 'MN');
   return { M1, M5, M15, M30, H1, H4, D1, W1, MN };
 }
 
-function lastClose(series) {
-  for (const tf of ['M1', 'M5', 'M15', 'M30', 'H1', 'D1']) {
-    const s = series[tf];
-    if (s && s.length) return { price: s[s.length - 1].c, t: s[s.length - 1].t };
-  }
-  return null;
+// The candles whose period has ended by `now`. Zones are found on these only:
+// a forming candle can still make or break a swing.
+export function closedOnly(series, tf, now) {
+  let n = series.length;
+  while (n > 0 && bucketEnd(tf, series[n - 1].t) > now) n--;
+  return n === series.length ? series : series.slice(0, n);
 }
+
+// The most recent price the candle feeds know: the last candle of whichever
+// feed has seen furthest. A feed that fell behind does not win just because it
+// is a finer timeframe. `at` is how far that candle is known: when it was
+// fetched, or its end, whichever is earlier.
+const OBSERVED = [['M1', 'M1'], ['M5', 'M5'], ['M15', 'M15'], ['M30', 'M30'], ['H1', 'H1'], ['D1U', 'D1']];
+
+export function latestObservation(raw, now) {
+  let best = null;
+  for (const [feed, tf] of OBSERVED) {
+    const s = raw[feed];
+    if (!s || !s.length) continue;
+    const c = s[s.length - 1];
+    // A UTC daily candle is not on the New York grid; its end is t + 1 day.
+    const end = tf === 'D1' ? c.t + 86400 : bucketEnd(tf, c.t);
+    const at = Math.min(now, end, c.asOf != null ? c.asOf : Infinity);
+    if (!best || at > best.at) best = { price: c.c, t: c.t, at, feed };
+  }
+  return best;
+}
+
+// Closed candles a timeframe needs before its zones count as ready: a cold
+// start with an hour of minute candles builds one candle on every timeframe,
+// and that must not pass for a real history.
+export const READY_MIN = { M5: 120, M15: 120, M30: 120, H1: 120, H4: 60, D1: 60, W1: 26 };
 
 // AREA_HALF_WIDTH_ATR: multi-timeframe areas are drawn as their centre +- this
 // share of the hourly ATR. zoneOptions / areaHalfWidthAtr exist for the
@@ -39,23 +69,31 @@ export const AREA_HALF_WIDTH_ATR = 0.1;
 
 export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HALF_WIDTH_ATR }) {
   const series = buildSeries(raw);
-  const last = lastClose(series);
+  const last = latestObservation(raw, now);
   if (!last) return null;
 
-  // Timeframes whose candles stop before the newest candle's period: their
-  // feed failed or fell behind and the minute data cannot bridge the gap.
-  // Their levels are shown but alerts must not rely on them.
+  // Timeframes whose candles stop before the newest observation's period:
+  // their feed failed or fell behind and the minute data cannot bridge the
+  // gap. Their levels are shown but alerts must not rely on them.
   const stale = tfs.filter((tf) => {
     const s = series[tf];
-    return !s || !s.length || s[s.length - 1].t < bucketOf(tf, last.t);
+    return !s || !s.length || s[s.length - 1].t < bucketOf(tf, last.at - 1);
   });
 
   const zones = {};
   const trend = {};
+  const closedCount = {};
+  // Timeframes with missing data among their newest candles.
+  const gaps = [];
   for (const tf of tfs) {
-    zones[tf] = computeZones(series[tf], tf, zoneOptions);
+    const closed = closedOnly(series[tf], tf, now);
+    closedCount[tf] = closed.length;
+    zones[tf] = computeZones(closed, tf, zoneOptions);
     trend[tf] = trendOf(series[tf]);
+    if (series[tf].slice(-3).some((c) => c.gap)) gaps.push(tf);
   }
+  // ready: enough closed history, and current.
+  const ready = tfs.filter((tf) => closedCount[tf] >= (READY_MIN[tf] || 60) && !stale.includes(tf));
 
   const key = keyLevels(series, now);
   const atrH1 = lastValue(atr(series.H1.slice(-300), 14));
@@ -75,5 +113,24 @@ export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HA
   const d1 = series.D1;
   const prevClose = d1.length > 1 ? d1[d1.length - 2].c : null;
 
-  return { now, lastPrice: price, lastT: last.t, series, zones, trend, key, conf, tol, atrH1, atrD1, day, prevClose, stale };
+  return {
+    now,
+    lastPrice: price,
+    lastT: last.t,
+    lastAt: last.at,
+    lastFeed: last.feed,
+    series,
+    zones,
+    trend,
+    key,
+    conf,
+    tol,
+    atrH1,
+    atrD1,
+    day,
+    prevClose,
+    stale,
+    gaps,
+    ready,
+  };
 }

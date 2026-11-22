@@ -2,7 +2,7 @@
 
 import { store } from '../store.js';
 import { nearestAreas } from '../core/confluence.js';
-import { biasCell, meter, px, roleBadge, signed, tagChips } from './format.js';
+import { areaMeter, biasCell, px, roleBadge, signed, tagChips } from './format.js';
 
 function areaRow(z, price, role) {
   const dist = role === 'resistance' ? z.lo - price : role === 'support' ? z.hi - price : 0;
@@ -10,7 +10,7 @@ function areaRow(z, price, role) {
   return `<div class="row">
     ${roleBadge(role)}
     <div class="lv-main"><span class="lv-price">${px(z.price)}</span>${range}${tagChips(z.tags)}</div>
-    <div class="lv-side"><div class="lv-dist">${role === 'inside' ? 'at price' : signed(dist)}</div>${meter(z.strength)}</div>
+    <div class="lv-side"><div class="lv-dist">${role === 'inside' ? 'at price' : signed(dist)}</div>${areaMeter(z)}</div>
   </div>`;
 }
 
@@ -78,5 +78,5 @@ export function renderOverview(el) {
       ${sessionTiles(a, price)}
     </div>
     <p class="note">Tags show where a level comes from: a timeframe's swing zone, a pivot (D/W/M), a previous high or low (PDH, PWL…), or a round number.</p>
-    <p class="note">Strength bars show how much price history backs a level: how many swings and timeframes, and how recent. In testing on past data they did not tell which levels price would turn at, so treat every level as a place to watch, not a trade signal.</p>`;
+    <p class="note">Strength bars rank a level against the others shown now: how many swings and timeframes back it, and how recent they are. They are a ranking, not a probability: in testing on past data they did not tell which levels price would turn at, so treat every level as a place to watch, not a trade signal. A round number on its own is shown as a reference price, without bars.</p>`;
 }

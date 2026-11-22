@@ -35,7 +35,7 @@ class AppWebClient(
             // Always plain text: feed data is only ever read as text by the
             // page, so a feed answer can never become a document or script
             // running in the app's origin.
-            return respond(r.status, "text/plain", r.body, noStore = true)
+            return respond(r.status, "text/plain", r.body, noStore = true, extra = r.headers)
         }
         // Only the two pages of the app may be shown as documents.
         if (request.isForMainFrame && path !in PAGES) {
@@ -80,16 +80,18 @@ class AppWebClient(
         contentType: String,
         body: ByteArray,
         noStore: Boolean = false,
+        extra: Map<String, String> = emptyMap(),
     ): WebResourceResponse {
         // WebResourceResponse rejects 3xx codes; the proxy never follows
         // redirects, so report one as an upstream failure.
         val code = if (status in 300..399 || status !in 100..599) 502 else status
         val mime = contentType.substringBefore(';').trim().ifEmpty { "text/plain" }
-        val headers = if (noStore) {
-            mapOf("Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff")
-        } else {
-            mapOf("X-Content-Type-Options" to "nosniff")
-        }
+        val headers = HashMap<String, String>()
+        headers["X-Content-Type-Options"] = "nosniff"
+        if (noStore) headers["Cache-Control"] = "no-store"
+        // Only the two headers the page reads are passed on from the proxy.
+        extra["Retry-After"]?.let { headers["Retry-After"] = it }
+        extra["X-Upstream-Date"]?.let { headers["X-Upstream-Date"] = it }
         return WebResourceResponse(mime, "utf-8", code, reason(code), headers, ByteArrayInputStream(body))
     }
 
@@ -99,7 +101,9 @@ class AppWebClient(
         403 -> "Forbidden"
         404 -> "Not Found"
         405 -> "Method Not Allowed"
+        429 -> "Too Many Requests"
         502 -> "Bad Gateway"
+        503 -> "Service Unavailable"
         else -> if (code < 400) "OK" else "Error"
     }
 

@@ -14,17 +14,33 @@ const FEEDS = { M1: 'M1', M5: 'M5', M15: 'M15', M30: 'M30', H1: 'H1', D1U: 'D1' 
 const KEEP = { M1: 1500, M5: 1500, M15: 1500, M30: 1500, H1: 3600, D1U: 2600 };
 const DEEP = new Set(['H1', 'D1U']);
 const SYNC_ORDER = ['M1', 'H1', 'D1U', 'M30', 'M15', 'M5'];
+// Feeds only needed while their own timeframe is switched on. M1, H1 and D1U
+// feed everything else (forming candles, H4, days, weeks, pivots).
+const OPTIONAL = { M5: 'M5', M15: 'M15', M30: 'M30' };
+
+export function feedsNeeded(tfs) {
+  return SYNC_ORDER.filter((f) => !OPTIONAL[f] || tfs.includes(OPTIONAL[f]));
+}
 
 // A quote is live only if all hold: it arrived recently (monotonic clock, so
 // changing the phone's clock cannot extend it), the feed's own timestamp has
-// moved recently (a frozen feed is not live), and that timestamp is close to
-// the phone's clock (a replayed old quote is not live).
+// moved recently (a frozen feed is not live), and that timestamp is recent by
+// the server's clock (a delayed or replayed quote is not live, and a wrong
+// phone clock cannot make an old quote look new).
 const QUOTE_FRESH_MS = 90 * 1000;
 const QUOTE_STILL_MS = 120 * 1000;
-const QUOTE_SKEW_SEC = 600;
+const QUOTE_MAX_AGE_SEC = 90;
+const QUOTE_FUTURE_SEC = 15;
 // Retry a failed feed after 30 s, doubling up to 5 minutes.
 const RETRY_BASE_SEC = 30;
 const RETRY_MAX_SEC = 300;
+// After a rate-limit answer without Retry-After: wait 60 s, doubling to 15 min.
+const COOLDOWN_BASE_SEC = 60;
+const COOLDOWN_MAX_SEC = 900;
+// Failed quote requests back off up to 2 minutes.
+const QUOTE_RETRY_MAX_SEC = 120;
+// Failed minute-candle polls back off up to 5 minutes.
+const M1_RETRY_MAX_SEC = 300;
 
 export const DEFAULTS = {
   source: 'dukascopy',
@@ -91,6 +107,10 @@ export const store = {
   feedRetryAt: {},
   analysisError: null,
 
+  // Server clock minus phone clock (seconds), from the quote feed's Date
+  // header. null until known.
+  clockOffset: null,
+
   _listeners: new Set(),
   _generation: 0,
   _lastQuoteTry: 0,
@@ -100,6 +120,18 @@ export const store = {
   _m1Busy: false,
   _recomputeTimer: null,
   _lastSave: 0,
+  // Every candle request gets a number when it starts. A response is merged
+  // into the series as it is when the response arrives, and on candles both
+  // have, the answer to the later request wins: a slow old request cannot
+  // undo what a newer one brought.
+  _seq: 0,
+  _committed: {},
+  // Provider id -> time (s) before which no request may go to it.
+  _cooldown: {},
+  _cooldownHits: {},
+  _m1Fails: 0,
+  _quoteFails: 0,
+  _quoteRetryAt: 0,
 
   on(fn) {
     this._listeners.add(fn);
@@ -131,9 +163,24 @@ export const store = {
     if (!q) return false;
     const m = monoMs();
     if (m - q.mono >= QUOTE_FRESH_MS || m - q.changedMono >= QUOTE_STILL_MS) return false;
-    const t = nowSec();
-    if (Math.abs(t - q.t) > QUOTE_SKEW_SEC) return false;
-    return marketStatus(t).open;
+    const age = this.serverNow() - q.t;
+    if (age > QUOTE_MAX_AGE_SEC || age < -QUOTE_FUTURE_SEC) return false;
+    return marketStatus(nowSec()).open;
+  },
+
+  // Seconds since the quote was made, by the server's clock (phone clock
+  // until the server's is known).
+  quoteAge() {
+    return this.quote ? this.serverNow() - this.quote.t : null;
+  },
+
+  serverNow() {
+    return nowSec() + (this.clockOffset || 0);
+  },
+
+  // The feeds this page fetches for the timeframes switched on.
+  feeds() {
+    return feedsNeeded(this.settings.tfs);
   },
 
   // ---- per-feed health -------------------------------------------------------
@@ -143,7 +190,8 @@ export const store = {
     if (scheduleRetry) {
       const fails = (this.feedFails[feed] || 0) + 1;
       this.feedFails[feed] = fails;
-      this.feedRetryAt[feed] = nowSec() + Math.min(RETRY_MAX_SEC, RETRY_BASE_SEC * 2 ** (fails - 1));
+      const backoff = nowSec() + Math.min(RETRY_MAX_SEC, RETRY_BASE_SEC * 2 ** (fails - 1));
+      this.feedRetryAt[feed] = Math.max(backoff, this._cooldown[this.settings.source] || 0);
     }
     this._updateErrors();
   },
@@ -158,9 +206,63 @@ export const store = {
   _updateErrors() {
     const list = [];
     if (this.analysisError) list.push(this.analysisError);
-    for (const f of SYNC_ORDER) if (this.feedErrors[f]) list.push(`${f}: ${this.feedErrors[f]}`);
+    for (const f of this.feeds()) if (this.feedErrors[f]) list.push(`${f}: ${this.feedErrors[f]}`);
     this.status.errors = list;
     this.status.error = list.length ? list[0] : null;
+  },
+
+  // Feeds that failed on their last try, among those in use.
+  failedFeeds() {
+    return this.feeds().filter((f) => this.feedErrors[f]);
+  },
+
+  // ---- request gate ---------------------------------------------------------
+
+  // Seconds left before the provider may be asked again (0 = now).
+  cooldownLeft(provId = this.settings.source) {
+    return Math.max(0, (this._cooldown[provId] || 0) - nowSec());
+  },
+
+  // Every candle request goes through here. While the provider has asked to
+  // slow down nothing is sent; a rate-limit answer starts (or extends) that
+  // wait for every feed of the provider, honouring its Retry-After. The
+  // native proxy keeps the same wait for every page of the app, so the
+  // monitor and the open app cannot hammer a provider between them.
+  async _candles(prov, tf, limit, before, key) {
+    const wait = this.cooldownLeft(prov.id);
+    if (wait > 0) {
+      const e = new Error(`${prov.name} asked to slow down; next try in ${wait} s`);
+      e.cooldown = true;
+      throw e;
+    }
+    try {
+      const c = await prov.candles(tf, limit, before, key);
+      this._cooldownHits[prov.id] = 0;
+      return c;
+    } catch (e) {
+      if (e.status === 429 || e.retryAfter != null) {
+        const hits = (this._cooldownHits[prov.id] || 0) + 1;
+        this._cooldownHits[prov.id] = hits;
+        const sec = e.retryAfter != null ? Math.max(1, e.retryAfter) : Math.min(COOLDOWN_MAX_SEC, COOLDOWN_BASE_SEC * 2 ** (hits - 1));
+        this._cooldown[prov.id] = Math.max(this._cooldown[prov.id] || 0, nowSec() + sec);
+        e.message = `${prov.name} rate limit (HTTP ${e.status || 429}); next try in ${sec} s`;
+      }
+      throw e;
+    }
+  },
+
+  // Merge a response into the series as it is now (not as it was when the
+  // request started). seq: the request's number from _seq.
+  _commit(feed, fresh, seq) {
+    const cur = this.raw[feed];
+    const newer = seq >= (this._committed[feed] || 0);
+    let next;
+    if (!cur.length) next = fresh;
+    else if (this._overlaps(cur, fresh)) next = newer ? mergeSeries(cur, fresh) : mergeSeries(fresh, cur);
+    else if (newer && fresh[0].t > cur[cur.length - 1].t) next = fresh; // after a gap: start again from the fresh candles
+    else next = mergeSeries(cur, fresh.filter((c) => c.t < cur[0].t)); // only older history from this answer
+    this.raw[feed] = trimTo(next, KEEP[feed]);
+    if (newer) this._committed[feed] = seq;
   },
 
   // `background: true` is the monitoring service's page. It has no window, so
@@ -203,8 +305,19 @@ export const store = {
       this.settings.source !== before.source ||
       (this.settings.source === 'twelvedata' && this.settings.twelveKey !== before.twelveKey);
     if (sourceChanged) this._resetData(false);
-    else if (before.tfs.join() !== this.settings.tfs.join()) this._recompute();
+    else if (before.tfs.join() !== this.settings.tfs.join()) this._tfsChanged(before.tfs);
     this.emit('settings');
+  },
+
+  // A timeframe switched on may need a feed this page has not been fetching.
+  _tfsChanged(beforeTfs) {
+    const had = new Set(feedsNeeded(beforeTfs));
+    const added = this.feeds().filter((f) => !had.has(f));
+    // Due now: fetched straight away, or right after a sync in progress.
+    for (const f of added) this.feedRetryAt[f] = nowSec();
+    this._updateErrors();
+    this._recompute();
+    if (added.length) this.sync(added);
   },
 
   // Candles from different feeds are never mixed: drop everything and reload.
@@ -215,6 +328,8 @@ export const store = {
     this.feedErrors = {};
     this.feedFails = {};
     this.feedRetryAt = {};
+    this._committed = {};
+    this._m1Fails = 0;
     this.analysisError = null;
     this.status = { ...this.status, syncing: false, fromCache: false, lastSync: 0, lastData: 0, error: null, errors: [] };
     if (clearSaved) {
@@ -241,7 +356,7 @@ export const store = {
       this.settings.source !== before.source ||
       (this.settings.source === 'twelvedata' && this.settings.twelveKey !== before.twelveKey);
     if (sourceChanged) this._resetData(true);
-    else if (patch.tfs) this._recompute();
+    else if (patch.tfs) this._tfsChanged(before.tfs);
     this.emit('settings');
   },
 
@@ -250,7 +365,7 @@ export const store = {
   },
 
   async testSource(source, key) {
-    const c = await PROVIDERS[source].candles('M1', 5, undefined, key);
+    const c = await this._candles(PROVIDERS[source], 'M1', 5, undefined, key);
     if (!c.length) throw new Error('The feed answered but returned no candles');
     return c[c.length - 1];
   },
@@ -268,7 +383,7 @@ export const store = {
     this.status.syncing = true;
     this.emit('status');
 
-    const queue = full ? SYNC_ORDER.slice() : SYNC_ORDER.filter((f) => feeds.includes(f));
+    const queue = full ? this.feeds() : this.feeds().filter((f) => feeds.includes(f));
     let okCount = 0;
     const worker = async () => {
       while (queue.length && gen === this._generation) {
@@ -312,42 +427,47 @@ export const store = {
   },
 
   async _syncShallow(feed, prov, key, gen) {
-    const fresh = this._received(await prov.candles(FEEDS[feed], prov.perRequest, undefined, key));
+    const seq = ++this._seq;
+    const fresh = this._received(await this._candles(prov, FEEDS[feed], prov.perRequest, undefined, key));
     if (gen !== this._generation) return;
-    const cur = this.raw[feed];
-    this.raw[feed] = trimTo(this._overlaps(cur, fresh) ? mergeSeries(cur, fresh) : fresh, KEEP[feed]);
+    this._commit(feed, fresh, seq);
   },
 
   async _syncDeep(feed, prov, key, gen) {
     const tf = FEEDS[feed];
     if (prov.single) {
-      const fresh = this._received(await prov.candles(tf, prov.single[tf], undefined, key));
+      const seq = ++this._seq;
+      const fresh = this._received(await this._candles(prov, tf, prov.single[tf], undefined, key));
       if (gen !== this._generation) return;
-      const cur = this.raw[feed];
-      this.raw[feed] = trimTo(this._overlaps(cur, fresh) ? mergeSeries(cur, fresh) : fresh, KEEP[feed]);
+      this._commit(feed, fresh, seq);
       return;
     }
     const pages = prov.pages[tf];
     const per = prov.perRequest;
-    let s = this._received(await prov.candles(tf, per, undefined, key));
+    const seq = ++this._seq;
+    const first = this._received(await this._candles(prov, tf, per, undefined, key));
     if (gen !== this._generation) return;
-    const cur = this.raw[feed];
-    if (this._overlaps(cur, s)) s = mergeSeries(cur, s);
-    this.raw[feed] = trimTo(s, KEEP[feed]);
+    this._commit(feed, first, seq);
     this._scheduleRecompute();
     // Page back for older history only when the cache does not already hold it.
-    for (let fetched = 1; fetched < pages && s.length < (pages - 0.5) * per; fetched++) {
-      const older = await prov.candles(tf, per, s[0].t, key);
+    for (let fetched = 1; fetched < pages && this.raw[feed].length < (pages - 0.5) * per; fetched++) {
+      const oldest = this.raw[feed][0].t;
+      const pageSeq = ++this._seq;
+      const older = await this._candles(prov, tf, per, oldest, key);
       if (gen !== this._generation) return;
-      if (!older.length || older[0].t >= s[0].t) break;
-      s = mergeSeries(older, s);
-      this.raw[feed] = trimTo(s, KEEP[feed]);
+      if (!older.length || older[0].t >= oldest) break;
+      // Older history only adds candles before what is held; it never
+      // replaces newer ones.
+      this._commit(feed, older.filter((c) => c.t < oldest), Math.min(pageSeq, seq));
     }
   },
 
   // Small, frequent update of the minute candles. Its failures are shown but
   // not given a retry schedule: the next poll is the retry. An empty minute
   // series is filled by the feed retry in _tick instead.
+  // Small, frequent update of the minute candles. A failure is shown and the
+  // next poll waits longer (doubling, up to 5 minutes); a rate limit waits as
+  // long as the provider asked.
   async _pollM1() {
     if (this._m1Busy || this.status.syncing || !this.raw.M1.length) return;
     this._m1Busy = true;
@@ -356,17 +476,21 @@ export const store = {
     const prov = this.provider();
     const key = this.settings.twelveKey;
     try {
-      const cur = this.raw.M1;
-      let fresh = this._received(await prov.candles('M1', 10, undefined, key));
+      let seq = ++this._seq;
+      let fresh = this._received(await this._candles(prov, 'M1', 10, undefined, key));
       if (gen !== this._generation) return;
+      const cur = this.raw.M1;
       const last = cur[cur.length - 1];
-      if (fresh[0].t > last.t + 120) {
-        // More than the small window was missed (app was in the background).
+      if (fresh[0].t > last.t + 60) {
+        // More than the small window was missed (app was in the background):
+        // fetch the whole stretch so the minute candles have no hole.
         const missed = Math.ceil((fresh[fresh.length - 1].t - last.t) / 60) + 5;
-        fresh = this._received(await prov.candles('M1', Math.min(prov.perRequest, missed), undefined, key));
+        seq = ++this._seq;
+        fresh = this._received(await this._candles(prov, 'M1', Math.min(prov.perRequest, missed), undefined, key));
         if (gen !== this._generation) return;
       }
-      this.raw.M1 = trimTo(this._overlaps(cur, fresh) ? mergeSeries(cur, fresh) : fresh, KEEP.M1);
+      this._commit('M1', fresh, seq);
+      this._m1Fails = 0;
       this.status.lastData = nowSec();
       this.status.fromCache = false;
       this._feedOk('M1');
@@ -374,6 +498,7 @@ export const store = {
       if (nowSec() - this._lastSave > 300) this._saveCache();
     } catch (e) {
       if (gen === this._generation) {
+        this._m1Fails++;
         this._feedFailed('M1', String(e.message || e), false);
         this.emit('status');
       }
@@ -382,20 +507,39 @@ export const store = {
     }
   },
 
+  // Seconds between minute polls: the provider's normal pace, longer after
+  // failures, and never before a requested cooldown ends.
+  _m1Delay(base) {
+    if (!this._m1Fails) return base;
+    return Math.min(M1_RETRY_MAX_SEC, base * 2 ** this._m1Fails);
+  },
+
   async _pollQuote() {
-    if (this._quoteBusy) return;
+    if (this._quoteBusy || nowSec() < this._quoteRetryAt) return;
     this._quoteBusy = true;
     this._lastQuoteTry = nowSec();
     try {
       const q = await fetchQuote();
+      if (q.serverT != null) this.clockOffset = q.serverT - nowSec();
+      this._quoteFails = 0;
+      this._quoteRetryAt = 0;
+      this.status.quoteError = null;
       const prev = this.quote;
+      // An answer older than the quote already held arrived late or out of
+      // order: keep the newer one.
+      if (prev && q.t < prev.t) {
+        this.emit('status');
+        return;
+      }
       const m = monoMs();
       const moved = !prev || q.t !== prev.t;
-      this.quote = { ...q, at: nowSec(), mono: m, changedMono: moved ? m : prev.changedMono };
+      this.quote = { bid: q.bid, ask: q.ask, t: q.t, at: nowSec(), mono: m, changedMono: moved ? m : prev.changedMono };
       this.status.lastQuote = this.quote.at;
-      this.status.quoteError = null;
       this.emit('quote');
     } catch (e) {
+      this._quoteFails++;
+      const wait = e.retryAfter != null ? e.retryAfter : Math.min(QUOTE_RETRY_MAX_SEC, this.settings.quoteSec * 2 ** this._quoteFails);
+      this._quoteRetryAt = nowSec() + wait;
       this.status.quoteError = String(e.message || e);
       this.emit('status');
     } finally {
@@ -412,10 +556,11 @@ export const store = {
       // background monitor also polls more gently than the open app.
       const bg = this._background;
       const quoteEvery = !open ? Math.max(60, this.settings.quoteSec) : bg ? Math.max(10, this.settings.quoteSec) : this.settings.quoteSec;
-      const m1Every = !open ? 600 : bg ? Math.max(60, prov.pollSec) : prov.pollSec;
+      const m1Every = this._m1Delay(!open ? 600 : bg ? Math.max(60, prov.pollSec) : prov.pollSec);
       const sinceSync = t - Math.max(this.status.lastSync, this._lastSyncTry);
-      if (!this.status.syncing) {
-        const due = SYNC_ORDER.filter((f) => this.feedRetryAt[f] && t >= this.feedRetryAt[f]);
+      // Nothing goes to a provider that asked to slow down until its wait ends.
+      if (!this.status.syncing && !this.cooldownLeft(prov.id)) {
+        const due = this.feeds().filter((f) => this.feedRetryAt[f] && t >= this.feedRetryAt[f]);
         if (sinceSync >= prov.resyncSec) this.sync();
         else if (due.length) this.sync(due);
         else if (t - this._lastM1Try >= m1Every) this._pollM1();

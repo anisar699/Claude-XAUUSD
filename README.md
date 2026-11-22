@@ -25,19 +25,28 @@ price:
 - moves **through** an area to the other side (judged on the live price, not
   on a candle close).
 
-You choose the minimum strength of area and the distance that counts as near.
+You choose the minimum rank of area and the distance that counts as near.
 Nothing fires on first sight of a level, and only a move of the price (not a
-level being recalculated) can raise an alert. Alerts pause while the market is
-closed, while the live price is not live (see below), and while any candle
-feed has a problem or a timeframe is out of date. An alert that follows such a
-pause says so.
+level being recalculated) can raise an alert. All alerts pause while the
+market is closed, while the live price is not live (see below), and while the
+minute candles stop updating. Beyond that each area is judged on its own
+inputs: it waits while a timeframe it comes from is still loading its history
+(a cold start), is out of date or has missing candles, or while a feed it is
+built from has a problem. Areas from other timeframes keep alerting. An area
+made only of a round number does not alert unless you switch that on, and
+pivots from an estimated period never do. An alert that follows a pause says
+so.
 
 Monitoring is a foreground service (`MonitorService.kt`) that runs the same
 analysis as the app in a WebView with no screen, so alerts always agree with
-the levels shown. While it is on there is a permanent notification. It keeps
-the phone awake only while the market is open; while it is closed the phone
-can sleep and an alarm wakes monitoring at the reopening (Android may deliver
-it a few minutes late). It does not restart by itself after a reboot, and
+the levels shown. While it is on there is a permanent notification. The page
+sends a heartbeat on every check; Settings shows what it is doing (checking
+levels, loading history, paused and why). If the heartbeat stops for 90
+seconds the page is rebuilt, and after three failed rebuilds monitoring stops
+and says so instead of showing "On". It keeps the phone awake only while the
+market is open, with a 10-minute wake lease that heartbeats renew; while the
+market is closed the phone can sleep and an alarm wakes monitoring at the
+reopening (Android may deliver it a few minutes late). It does not restart by itself after a reboot, and
 Android can still pause it when the phone sits idle for a long time; setting
 the app's battery use to Unrestricted helps. Settings warns when notifications,
 or just the "Level alerts" category, are switched off.
@@ -46,17 +55,45 @@ or just the "Level alerts" category, are switched off.
 
 - **Live price**: received in the last 90 seconds (measured on a clock that
   changing the phone's time does not affect), its own timestamp moved in the
-  last 2 minutes and is within 10 minutes of the phone's clock, and the market
-  is open. Otherwise the app shows the last candle close.
-- **Candles**: each feed is tracked on its own. A failed or empty answer is an
-  error for that feed, shown until it recovers, and retried after 30 s,
-  doubling to at most 5 minutes. A timeframe whose candles stop before the
-  newest candle's period is marked out of date.
+  last 2 minutes, at most 90 seconds old and not more than 15 seconds in the
+  future by the price server's clock (from its Date header, so a wrong phone
+  clock does not matter), and the market is open. A quote older than the one
+  already held is ignored. Otherwise the app shows the latest candle price:
+  the one from whichever candle feed was updated most recently.
+- **Candles**: each feed is tracked on its own, and only feeds the enabled
+  timeframes need are fetched. A failed or empty answer is an error for that
+  feed, shown until it recovers, and retried after 30 s, doubling to at most 5
+  minutes. A timeframe whose candles stop before the newest observation's
+  period is marked out of date. Every request is numbered; an answer is merged
+  into the candles as they are when it arrives, and a slow older request never
+  overwrites what a newer one brought.
+- **Closed candles only**: zones are found on closed candles; the forming one
+  is shown on the chart but cannot make or remove a zone.
+- **Missing data**: a gap the market traded through (not a weekend, the daily
+  break or a holiday) is marked on the candles after it and on the H4 / day
+  candles built from them. A swing next to such a hole is not counted. Daily
+  candles built from hourly data are used only from the first day the hourly
+  history fully covers; older days rebuilt from UTC daily candles are marked
+  estimated, and pivots from an estimated period are labelled and never alerted
+  on.
+- **Rate limits**: when a provider answers 429 (or 503 with Retry-After),
+  nothing is sent to it, from any page of the app, until the wait it asked for
+  is over; without Retry-After the wait starts at 30-60 s and doubles. Failed
+  quote and minute-candle requests also back off.
 - Malformed candles and quotes (duplicate times, impossible highs and lows,
   crossed prices, missing timestamps) are dropped before use, including from
   saved data.
 - Twelve Data requests from the app and the monitor share one budget (7 a
-  minute, 780 a day) so the free plan is not exceeded.
+  minute, 780 a day) so the free plan is not exceeded; the native proxy also
+  allows at most 8 a minute across both.
+
+### The chart
+
+Candles are the candle feed's own (Dukascopy or Twelve Data bid). The live
+Swissquote price is drawn as a separate dashed "Live" line and never written
+into a candle, so the chart shows only highs and lows the analysis also saw.
+With no candles for a timeframe or feed (yet), the chart is cleared rather than
+left showing another one's.
 
 ## How levels are calculated
 
@@ -81,11 +118,51 @@ The code is in `app/src/main/assets/www/js/core/`.
 
 `tools/sr-backtest.mjs` tests the zones walk-forward: at each test point the
 engine sees only past candles, and its zones are scored on the next 6 hours
-(M5) to 6 weeks (W1). The scores are compared with random lines of the same
-count and width, and settings were chosen on the first 60% of the history and
+(M5) to 6 weeks (W1). Settings were chosen on the first 60% of the history and
 checked on the last 40%.
 
-Version 1.2 against 1.1, on the checked part (points above random lines):
+**Corrected results, 22 November 2026.** The 1.4.0 developer audit (F08)
+showed that the earlier control made the levels look better than they are: it
+placed random lines anywhere within 6 ATR, while real levels sit nearer price.
+Since 1.5 each real zone is compared with random twins on the same side of
+price, with the same width and at the same distance (0.5 ATR bands); real and
+random are scored on the same test points; everything scored stays inside the
+window; equal highs count once; and a touch must trade inside the band. The +-
+is the standard error across 8 time blocks.
+
+Points above matched random bands, Dukascopy history to 20 Nov 2026
+(tune / check):
+
+| | Turned at the zone, when reached | Turning points marked beforehand |
+|---|---|---|
+| M5 zones (3 months) | +1.0 / +1.2 (+-1) | +0.6 / +0.4 (+-1) |
+| M15 zones (10 months) | -0.1 / -0.2 (+-2) | +0.6 / +1.5 (+-1) |
+| H1 zones (2 years) | -0.6 / +1.8 (+-1) | +0.4 / +2.7 (+-1 / 2) |
+| H4 zones (2 years) | -1.4 / +2.7 (+-2) | -2.1 / +0.8 (+-2 / 3) |
+| D1 zones (9 years) | +0.3 / +0.5 (+-1) | +7.2 / +3.7 (+-4 / 3) |
+| Multi-TF areas, hourly chart | +1.6 / +0.9 (+-1) | **+5.4 / +4.6 (+-1)** |
+
+What this means:
+
+- Single-timeframe zones are at best a few points better than random bands at
+  the same distance, often within noise. The multi-timeframe areas (what the
+  Overview and the alerts use) are the one result clearly above noise in both
+  parts: they mark about 5 points more of the later turning points than random
+  bands placed the same way.
+- Price reaching a level turns there about as often as at a random band
+  (reaction: 37% real vs 37% random on H1). Treat levels as places to watch,
+  not as signals; strength is a ranking, not a probability.
+- W1 (and partly D1) cannot be judged this way: with the turning point's wing
+  required inside a 6-week window, there are almost none to score.
+- Against the old control the same zones showed +2 to +14 points; those older
+  numbers below are kept as history, not as a claim. No setting was re-tuned
+  on the corrected test yet; that is the next step before any change to the
+  scores.
+
+<details><summary>Earlier results (old control, overstated)</summary>
+
+Version 1.2 against 1.1, on the checked part (points above random lines
+placed anywhere within 6 ATR):
 
 | | M5 | M15 | H1 | H4 |
 |---|---|---|---|---|
@@ -93,21 +170,16 @@ Version 1.2 against 1.1, on the checked part (points above random lines):
 | Turned at the zone, when reached | -1 → +3 | -1 → +2 | +4 → +4 | +1 → +2 |
 | Turning points marked beforehand | +3 → +6 | +4 → +5 | +6 → +7 | +6 → +6 |
 
-D1 and W1 kept their settings (the new ones did worse there) and are only
-drawn narrower. What the test also shows:
+Multi-timeframe areas (1.4), same old control, tune / check: turning points
+marked +11 / +14 (H1-W1 timeframes), +13 / +18 (app default timeframes).
 
-- Levels mark where price turns somewhat better than random lines, but price
-  reaching a level turns there only a few points more often than at a random
-  line. Treat levels as places to watch, not as signals.
-- The strength bars measure how much history backs a level. They did not
-  predict which levels price turned at, and neither did touches, age or
-  distance from price.
+</details>
 
 ### Multi-timeframe areas (1.4)
 
-Each source of levels was scored on its own against random lines, on the
-hourly chart (2 years, next 48 hours) and on the 15-minute chart (10 months,
-next 16 hours):
+Each source of levels was scored on its own against random lines (old
+control, see above), on the hourly chart (2 years, next 48 hours) and on the
+15-minute chart (10 months, next 16 hours):
 
 | Source | Hourly chart | 15-minute chart |
 |---|---|---|
@@ -120,30 +192,20 @@ next 16 hours):
 | Previous day high/low, Asia session high/low | – | **worse** than random lines |
 | Volume-profile peaks, ATR zigzag swings | no better than random | – |
 
-The area weights now follow these results (`TF_WEIGHT` etc. in
+The area weights follow these results (`TF_WEIGHT` etc. in
 `js/core/confluence.js`): H1 zones and R1/S1 pivots count most, round
 numbers more than before, D1/W1 zones and the previous month's high/low
-little, R3/S3 pivots not at all. Before, the D1 and W1 zones counted most.
+little, R3/S3 pivots not at all. Under the corrected test the weighted areas
+still beat the 1.1-style areas (turning points marked +5.4 / +4.6 against
++3.1 / +4.1), but by less than the old test said; the weights have not been
+re-derived with the matched control yet.
 
-Areas, points above random lines (tune / check):
-
-| | 1.3 | 1.4 |
-|---|---|---|
-| Hourly chart, H1-W1 timeframes, turning points marked | +6 / +7 | **+11 / +14** |
-| Hourly chart, app default timeframes, turning points marked | +11 / +13 | **+13 / +18** |
-| Hourly chart, price turned at a reached area | +0 / +2 | +2 / +3 |
-| 15-minute chart, turning points marked | +5 / +5 | +5 / +5 |
-
-On the newest week (14-20 Nov 2026, not used for any choice) the 15-minute
-results were within noise of each other (about 5 independent test points).
-
-Tried and not adopted, because they did not beat the current version on
+Tried and not adopted, because they did not beat the then-current version on
 both parts of the history: weighting swings by volume or by rejection-wick
 length, volume-profile levels, ATR zigzag swings, a level's past
-reversal/break record, a trend filter (+2 to +3 points at best), $10 round
-numbers, dropping the previous day's high/low, other area widths and
-centres. A model of which reached level price turns at found no usable
-signal, so strength is still not a probability.
+reversal/break record, a trend filter, $10 round numbers, dropping the
+previous day's high/low, other area widths and centres. A model of which
+reached level price turns at found no usable signal.
 
 ```sh
 NODE_USE_ENV_PROXY=1 node tools/sr-backtest.mjs --fetch data   # history from Dukascopy
@@ -191,7 +253,7 @@ in a WebView. The Android shell (`MainActivity.kt`, `AppWebClient.kt`,
 `ApiProxy.kt`) serves those files and forwards data requests to the feeds.
 
 ```sh
-npm test                    # unit tests for the analysis code (Node 22+)
+npm test                    # unit tests: analysis, store, monitor, scoring rules (Node 22+)
 node tools/dev-server.mjs   # run the UI in a desktop browser: http://127.0.0.1:8765
 node tools/live-check.mjs   # print the analysis for the live market
 LIVE_TESTS=1 ./gradlew testDebugUnitTest   # native proxy against the real feeds
