@@ -74,7 +74,8 @@ function monitorText(n, on) {
   const line = rest.join('|');
   if (!on) return state === 'failed' ? 'Off · it stopped responding; start it again' : 'Off';
   const base = MONITOR_STATES[state] || 'On';
-  return state === 'paused' && line ? `${base}: ${line}` : base;
+  // The paused status line already says why and that alerts are paused.
+  return state === 'paused' && line ? `On · ${line}` : base;
 }
 
 function alertRecentBlock() {

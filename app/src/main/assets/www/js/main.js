@@ -116,9 +116,13 @@ for (const ev of ['touchend', 'touchcancel']) {
   );
 }
 
+let ticks = 0;
 store.on((type) => {
   if (type === 'tick') {
     renderHeader();
+    // The monitor's state lives in the Android service: look again every 5 s
+    // while Settings is open, even when no data arrives (market closed).
+    if (active === 'settings' && ++ticks % 5 === 0) renderSettingsStatus();
     return;
   }
   renderHeader();
