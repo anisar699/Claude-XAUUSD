@@ -81,8 +81,6 @@ export function roleBadge(role) {
   return `<span class="badge ${r.cls}" role="img" aria-label="${r.name}">${r.letter}</span>`;
 }
 
-export const TF_NAME = { M5: 'M5', M15: 'M15', M30: 'M30', H1: 'H1', H4: 'H4', D1: 'D1', W1: 'W1' };
-
 // Plain-language names for the tags shown on confluence areas.
 export function tagTitle(tag) {
   if (/^\d+$/.test(tag)) return `Round number ${tag}`;

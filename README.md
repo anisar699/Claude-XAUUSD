@@ -46,8 +46,11 @@ seconds the page is rebuilt, and after three failed rebuilds monitoring stops
 and says so instead of showing "On". It keeps the phone awake only while the
 market is open, with a 10-minute wake lease that heartbeats renew; while the
 market is closed the phone can sleep and an alarm wakes monitoring at the
-reopening (Android may deliver it a few minutes late). It does not restart by itself after a reboot, and
-Android can still pause it when the phone sits idle for a long time; setting
+reopening (Android may deliver it a few minutes late). While the market is
+open a check-up alarm runs every 15 minutes. If Android has killed the app
+while monitoring was on, either alarm starts it again. It does not restart by
+itself after a reboot or an app update, and Android can still pause it when
+the phone sits idle for a long time; setting
 the app's battery use to Unrestricted helps. Settings warns when notifications,
 or just the "Level alerts" category, are switched off.
 

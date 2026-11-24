@@ -163,6 +163,7 @@ class MonitorService : Service() {
     // service is gone, and stop.
     private fun fail() {
         state = "failed"
+        setWanted(this, false) // do not bring a page that keeps failing back
         holdWake(false)
         val n = Notification.Builder(this, CHANNEL_MONITOR)
             .setSmallIcon(R.drawable.ic_stat_levels)
@@ -183,6 +184,19 @@ class MonitorService : Service() {
 
     private fun alarms() = getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
+    // It must be an exact alarm: Android delivers an inexact one up to hours
+    // late. Exact alarms are also what may start this service again from the
+    // background (MonitorAlarmReceiver) if Android has killed the app.
+    private fun scheduleAlarm(atMs: Long) {
+        val am = alarms()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()) {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMs, alarmIntent())
+        } else {
+            // Exact alarms switched off for this app: the best Android allows.
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMs, alarmIntent())
+        }
+    }
+
     /** The market opened (or a wake-up alarm fired): keep the CPU awake and check now. */
     internal fun wake() {
         handler.post {
@@ -198,6 +212,7 @@ class MonitorService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            setWanted(this, false)
             stopSelf()
             return START_NOT_STICKY
         }
@@ -227,8 +242,9 @@ class MonitorService : Service() {
         /**
          * open: the market is open now. nextChangeMs: when that changes (epoch ms).
          * While closed, let the phone sleep and set an alarm for the reopening.
-         * It must be an exact alarm: Android delivers an inexact one up to
-         * hours late, which would miss the open.
+         * While open, keep a check-up alarm REVIVE_MS ahead. Either alarm
+         * re-reports the market state (which sets the next one) if the
+         * service is alive, and starts it again if Android killed the app.
          */
         @JavascriptInterface
         fun marketState(open: Boolean, nextChangeMs: Double) {
@@ -236,17 +252,10 @@ class MonitorService : Service() {
                 if (!running) return@post
                 wantAwake = open
                 if (open) {
-                    alarms().cancel(alarmIntent())
                     holdWake(true)
+                    scheduleAlarm(System.currentTimeMillis() + REVIVE_MS)
                 } else {
-                    val at = nextChangeMs.toLong().coerceAtLeast(System.currentTimeMillis() + 60_000)
-                    val am = alarms()
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()) {
-                        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmIntent())
-                    } else {
-                        // Exact alarms switched off for this app: the best Android allows.
-                        am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, alarmIntent())
-                    }
+                    scheduleAlarm(nextChangeMs.toLong().coerceAtLeast(System.currentTimeMillis() + 60_000))
                     holdWake(false)
                 }
             }
@@ -339,6 +348,9 @@ class MonitorService : Service() {
         private const val STABLE_MS = 10 * 60_000L
         private const val WAKE_LEASE_MS = 10 * 60_000L
         private const val WAKE_RENEW_MS = 2 * 60_000L
+        private const val REVIVE_MS = 15 * 60_000L
+        private const val PREFS = "monitor"
+        private const val KEY_WANTED = "wanted"
 
         /** True while the service is alive in this process. */
         @Volatile
@@ -366,11 +378,34 @@ class MonitorService : Service() {
             private set
 
         fun start(context: Context) {
+            setWanted(context, true)
             context.startForegroundService(Intent(context, MonitorService::class.java))
         }
 
         fun stop(context: Context) {
+            setWanted(context, false)
             context.stopService(Intent(context, MonitorService::class.java))
+        }
+
+        /**
+         * Whether the user has monitoring switched on, kept across the app
+         * being killed: an alarm that finds the service gone starts it again
+         * only then.
+         */
+        fun wanted(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_WANTED, false)
+
+        internal fun setWanted(context: Context, on: Boolean) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_WANTED, on).apply()
+        }
+
+        /** From an exact alarm, which Android allows to start a foreground service from the background. */
+        internal fun revive(context: Context) {
+            try {
+                context.startForegroundService(Intent(context, MonitorService::class.java))
+            } catch (e: RuntimeException) {
+                // Refused: the user can start it again from the app.
+            }
         }
 
         fun createChannels(context: Context) {

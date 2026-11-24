@@ -17,8 +17,8 @@ android {
         // six-hours-a-day cap Android 15 puts on dataSync foreground services
         // for apps that target 35, which would cut background alerts short.
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.5.0"
+        versionCode = 7
+        versionName = "1.5.1"
     }
 
     signingConfigs {

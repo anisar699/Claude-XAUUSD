@@ -105,7 +105,13 @@ function pivotCard(a, price) {
   const prevRows = [['High', 'h'], ['Low', 'l'], ['Close', 'c']]
     .map(([label, f]) => `<tr><td class="k">${label}</td>${cols.map((c) => `<td>${cell(k[c].prev && k[c].prev[f])}</td>`).join('')}</tr>`)
     .join('');
-  const head = '<thead><tr><th></th><th>Daily</th><th>Weekly</th><th>Monthly</th></tr></thead>';
+  // A period rebuilt from UTC days, or with missing data, gives estimates.
+  const name = { D: 'Daily', W: 'Weekly', M: 'Monthly' };
+  const head = `<thead><tr><th></th>${cols.map((c) => `<th>${name[c]}${k[c].approx ? '*' : ''}</th>`).join('')}</tr></thead>`;
+  const est = cols.filter((c) => k[c].approx && k[c].pivots);
+  const estNote = est.length
+    ? `<p class="note">* Estimated: the ${est.map((c) => name[c].toLowerCase()).join(' and ')} values come from a period the loaded history does not fully cover. They are not used for alerts.</p>`
+    : '';
   return `<div class="card">
       <div class="card-h"><h2>Pivot points</h2><span>classic · price ${px(price)}</span></div>
       <table>${head}<tbody>${rows}</tbody></table>
@@ -114,6 +120,7 @@ function pivotCard(a, price) {
       <div class="card-h"><h2>Previous period</h2><span>day · week · month</span></div>
       <table>${head}<tbody>${prevRows}</tbody></table>
     </div>
+    ${estNote}
     <p class="note">Days roll at 17:00 New York, the convention most MT4/MT5 brokers use, so these should match a broker chart closely.</p>`;
 }
 

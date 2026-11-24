@@ -168,12 +168,6 @@ export const store = {
     return marketStatus(nowSec()).open;
   },
 
-  // Seconds since the quote was made, by the server's clock (phone clock
-  // until the server's is known).
-  quoteAge() {
-    return this.quote ? this.serverNow() - this.quote.t : null;
-  },
-
   serverNow() {
     return nowSec() + (this.clockOffset || 0);
   },
@@ -462,12 +456,10 @@ export const store = {
     }
   },
 
-  // Small, frequent update of the minute candles. Its failures are shown but
-  // not given a retry schedule: the next poll is the retry. An empty minute
-  // series is filled by the feed retry in _tick instead.
   // Small, frequent update of the minute candles. A failure is shown and the
   // next poll waits longer (doubling, up to 5 minutes); a rate limit waits as
-  // long as the provider asked.
+  // long as the provider asked. An empty minute series is filled by the feed
+  // retry in _tick instead.
   async _pollM1() {
     if (this._m1Busy || this.status.syncing || !this.raw.M1.length) return;
     this._m1Busy = true;
