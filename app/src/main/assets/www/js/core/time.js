@@ -2,8 +2,11 @@
 //
 // Most MT4/MT5 brokers run "New York close" charts: server time is New York
 // time + 7h, so the daily candle rolls at 17:00 New York and there is no
-// Sunday candle. H4/D1/W1/MN buckets here follow that convention so candles
-// and levels line up with a broker chart.
+// Sunday candle. H4/D1/W1/MN buckets here follow that convention by default
+// so candles and levels line up with a broker chart. Brokers whose server
+// runs on UTC (GMT+0, for example Exness) roll the day at 00:00 UTC: pick
+// that with setServerTime('utc'). Their short Sunday-evening session is
+// folded into Monday, as the New York close convention does.
 
 const HOUR = 3600;
 const DAY = 86400;
@@ -23,8 +26,20 @@ export function nyOffsetSec(t) {
   return t >= start && t < end ? -4 * HOUR : -5 * HOUR;
 }
 
+// 'ny': day rolls at 17:00 New York (server = New York + 7h).
+// 'utc': day rolls at 00:00 UTC (server = UTC).
+let SERVER_MODE = 'ny';
+
+export function setServerTime(mode) {
+  SERVER_MODE = mode === 'utc' ? 'utc' : 'ny';
+}
+
+export function serverTimeMode() {
+  return SERVER_MODE;
+}
+
 export function serverOffsetSec(t) {
-  return nyOffsetSec(t) + 7 * HOUR;
+  return SERVER_MODE === 'utc' ? 0 : nyOffsetSec(t) + 7 * HOUR;
 }
 
 export const TF = {
@@ -50,14 +65,20 @@ function h4Bucket(t) {
   return Math.floor((t + off) / (4 * HOUR)) * 4 * HOUR - off;
 }
 
+// On a UTC server the market opens on Sunday evening; that stub belongs to
+// Monday's day and week, as it does on a New York close server.
+function sundayFold(days) {
+  return SERVER_MODE === 'utc' && (days + 4) % 7 === 0 ? days + 1 : days;
+}
+
 function dayBucket(t) {
   const off = serverOffsetSec(t);
-  return Math.floor((t + off) / DAY) * DAY - off;
+  return sundayFold(Math.floor((t + off) / DAY)) * DAY - off;
 }
 
 function weekBucket(t) {
   const off = serverOffsetSec(t);
-  const days = Math.floor((t + off) / DAY);
+  const days = sundayFold(Math.floor((t + off) / DAY));
   const dow = (days + 4) % 7; // 1970-01-01 was a Thursday; 0 = Sunday
   const monday = days - ((dow + 6) % 7);
   return monday * DAY - off;

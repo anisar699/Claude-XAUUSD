@@ -14,7 +14,50 @@ financial advice.
   multi-timeframe areas, and daily / weekly / monthly pivot points with the
   previous period's high, low and close.
 - **Chart**: candles with the levels drawn on them.
-- **Settings**: alerts, timeframes, refresh rate, data source, data status.
+- **Trades**: plan a trade from a level and save it with an alert at its
+  entry; a trade journal with your own statistics.
+- **Settings**: alerts, your broker (price offset, day boundary), timeframes,
+  refresh rate, data source, data status.
+- **Home-screen widget**: price, change and the nearest resistance and
+  support, updated while the app or background monitoring runs.
+
+## Tools for trading (1.6)
+
+- **Trade planner**: tap any level on Overview or Levels. A long at support
+  enters at the area's top edge with the stop below it (a quarter of the
+  hourly ATR plus the spread beyond the area); a short at resistance the
+  other way round. Targets are the near edges of the next areas, each with
+  its reward-to-risk. From your balance and risk per trade it works out the
+  lot size (rounded down, 100 oz per lot unless you change it). A saved plan
+  sends a notification when price reaches its entry (with background
+  monitoring on).
+- **Trade journal**: log the trades you take (from a plan or by hand): entry,
+  stop, target, exit, lots, setup, timeframe, notes; the session is filled in
+  from the time. Statistics: win rate, average R (expectancy), profit and
+  loss, profit factor, by setup, session and direction. Share it as CSV.
+- **Sessions**: Asia (Tokyo 09:00-18:00), London and New York (08:00-17:00
+  local, with their own daylight saving): current session, each one's high
+  and low and its 30-minute opening range; also as chart lines.
+- **Market structure**: per timeframe, the last swing high (HH / LH) and low
+  (HL / LL) and the latest break of structure (BOS), or change of character
+  (CHoCH) when it broke against the one before; in the trend table, the
+  Levels screen and as chart lines.
+- **Your broker**: a price offset (type your broker's bid and tap "Match my
+  broker") so every level, candle and alert reads in your broker's prices, and
+  the day boundary: 17:00 New York (GMT+2/+3 servers, the default) or 00:00 UTC
+  (GMT+0 servers such as Exness).
+- **More alerts**: breaks confirmed on a 15-minute or 1-hour candle close
+  instead of the live price; **break and retest** (an approach, within 48
+  hours, to an area price broke, from the new side); **liquidity sweeps** (a
+  candle wicks beyond an area and closes back).
+
+Sweeps and retests were measured before release (`tools/research/events.mjs`,
+two years of hourly and ten months of 15-minute data): at the
+multi-timeframe areas they were followed by a 1 ATR move in the expected
+direction as often as the same events at matched random bands (hourly
+sweeps 44% vs 44%, retests 59% vs 61%; 15-minute sweeps 34% vs 33%, retests
+41% vs 40%). They describe what price is doing at a level; they are not a
+signal on their own, and the app says so.
 
 ## Alerts
 
@@ -218,6 +261,7 @@ node tools/sr-backtest.mjs data strength   # strength bars vs outcome
 node tools/research/sources.mjs . data     # each source alone, hourly chart
 node tools/research/sources15.mjs . data   # each source alone, 15-minute chart
 node tools/research/features2.mjs . data   # level properties vs outcome
+node tools/research/events.mjs . data      # sweeps and retests vs random bands
 ```
 
 ## Data sources

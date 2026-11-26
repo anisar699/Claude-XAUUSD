@@ -94,3 +94,21 @@ test('with hourly history ready, an H1 area alerts although M15 failed (P12)', a
   assert.ok(sent.alert.some((x) => x.body.includes('H1')));
   assert.match(sent.status.at(-1), /M15[^·]* not ready/, "the status says which timeframes wait");
 });
+
+test('a saved plan notifies once when price reaches its entry', async () => {
+  const { savePlan, readHits } = await import('../app/src/main/assets/www/js/data/trades.js');
+  savePlan({ id: 'p1', created: sec(), dir: 'long', entry: 3990, sl: 3985, tps: [4000], lots: 0.1 });
+  sent.alert.length = 0;
+  await quoteAt(3994); // above the entry: armed
+  assert.equal(sent.alert.length, 0);
+  await quoteAt(3989.5);
+  const hit = sent.alert.find((x) => x.title === 'Plan entry reached: BUY 3990.00');
+  assert.ok(hit, 'entry alert sent');
+  assert.match(hit.body, /SL 3985.00 · TP 4000.00 \(2.0R\) · 0.1 lots/);
+  assert.ok(readHits().p1);
+  const n = sent.alert.length;
+  await quoteAt(3995);
+  await quoteAt(3989);
+  assert.equal(sent.alert.filter((x) => x.title.startsWith('Plan entry')).length, 1, 'only once');
+  assert.ok(sent.alert.length >= n);
+});

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home-screen widget: price, change and the nearest areas (LevelsWidget.kt). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/widget_symbol"
+            android:textColor="#898781"
+            android:textSize="12sp" />
+        <TextView
+            android:id="@+id/w_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#898781"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/w_price"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/widget_no_price"
+        android:textColor="#F0EFEC"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/w_change"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#898781"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/w_res"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="#EF5350"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/w_sup"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#26A69A"
+        android:textSize="13sp" />
+</LinearLayout>

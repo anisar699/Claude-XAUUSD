@@ -3,7 +3,7 @@
 import { PROVIDERS, cleanCandles, fetchQuote } from './data/providers.js';
 import { analyse } from './core/model.js';
 import { mergeSeries, trimTo } from './core/candles.js';
-import { ANALYSIS_TFS, marketStatus } from './core/time.js';
+import { ANALYSIS_TFS, marketStatus, setServerTime } from './core/time.js';
 import { ALERT_DEFAULTS } from './core/alerts.js';
 
 const SETTINGS_KEY = 'xau.settings.v1';
@@ -48,10 +48,19 @@ export const DEFAULTS = {
   quoteSec: 5,
   tfs: ['M15', 'M30', 'H1', 'H4', 'D1', 'W1'],
   chartTf: 'H1',
-  chartLayers: { zones: true, areas: false, pivots: false, ema: false },
+  chartLayers: { zones: true, areas: false, pivots: false, ema: false, sessions: false, structure: false },
   levelsTab: 'ALL',
   alerts: { ...ALERT_DEFAULTS },
+  // The broker's price minus the feed's, in dollars: added to every price.
+  brokerOffset: 0,
+  // When the broker's day (and H4 / week / month) starts: 'ny' = 17:00 New
+  // York, 'utc' = 00:00 UTC.
+  dayBoundary: 'ny',
+  // For the trade planner: account size, risk per trade (%), ounces per lot.
+  account: { balance: 1000, riskPct: 1, contract: 100 },
 };
+
+const num = (v, lo, hi, d) => (Number.isFinite(Number(v)) && Number(v) >= lo && Number(v) <= hi ? Number(v) : d);
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const monoMs = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
@@ -76,6 +85,14 @@ function loadSettings() {
     ...s,
     chartLayers: { ...DEFAULTS.chartLayers, ...(s.chartLayers || {}) },
     alerts: { ...DEFAULTS.alerts, ...(s.alerts || {}) },
+    account: { ...DEFAULTS.account, ...(s.account || {}) },
+  };
+  out.brokerOffset = num(out.brokerOffset, -50, 50, 0);
+  if (out.dayBoundary !== 'utc') out.dayBoundary = 'ny';
+  out.account = {
+    balance: num(out.account.balance, 0, 1e9, DEFAULTS.account.balance),
+    riskPct: num(out.account.riskPct, 0, 100, DEFAULTS.account.riskPct),
+    contract: num(out.account.contract, 0.0001, 1e6, DEFAULTS.account.contract),
   };
   out.tfs = ANALYSIS_TFS.filter((tf) => (Array.isArray(out.tfs) ? out.tfs : DEFAULTS.tfs).includes(tf));
   if (!out.tfs.length) out.tfs = DEFAULTS.tfs.slice();
@@ -155,8 +172,16 @@ export const store = {
   // last candle close. A quote received while the market is closed is the
   // provider's parked weekend price (wide spread), not a tradable one.
   price() {
-    if (this.priceIsLive()) return this.quote.bid;
-    return this.analysis ? this.analysis.lastPrice : this.quote ? this.quote.bid : null;
+    if (this.priceIsLive()) return this.liveBid();
+    return this.analysis ? this.analysis.lastPrice : this.quote ? this.liveBid() : null;
+  },
+
+  // The quote's bid in the broker's prices (with the offset), and its spread.
+  liveBid() {
+    return this.quote ? this.quote.bid + this.settings.brokerOffset : null;
+  },
+  spread() {
+    return this.quote ? Math.max(0, this.quote.ask - this.quote.bid) : 0;
   },
   priceIsLive() {
     const q = this.quote;
@@ -264,6 +289,7 @@ export const store = {
   // native side calls tick() on its own clock instead.
   init(opts = {}) {
     this._background = !!opts.background;
+    setServerTime(this.settings.dayBoundary);
     this._settingsRaw = this._readSettingsRaw();
     this._loadCache();
     this._recompute();
@@ -298,9 +324,15 @@ export const store = {
     const sourceChanged =
       this.settings.source !== before.source ||
       (this.settings.source === 'twelvedata' && this.settings.twelveKey !== before.twelveKey);
+    setServerTime(this.settings.dayBoundary);
     if (sourceChanged) this._resetData(false);
     else if (before.tfs.join() !== this.settings.tfs.join()) this._tfsChanged(before.tfs);
+    else if (this._pricingChanged(before)) this._recompute();
     this.emit('settings');
+  },
+
+  _pricingChanged(before) {
+    return before.brokerOffset !== this.settings.brokerOffset || before.dayBoundary !== this.settings.dayBoundary;
   },
 
   // A timeframe switched on may need a feed this page has not been fetching.
@@ -349,8 +381,10 @@ export const store = {
     const sourceChanged =
       this.settings.source !== before.source ||
       (this.settings.source === 'twelvedata' && this.settings.twelveKey !== before.twelveKey);
+    setServerTime(this.settings.dayBoundary);
     if (sourceChanged) this._resetData(true);
     else if (patch.tfs) this._tfsChanged(before.tfs);
+    else if (this._pricingChanged(before)) this._recompute();
     this.emit('settings');
   },
 
@@ -574,7 +608,7 @@ export const store = {
 
   _recompute() {
     try {
-      this.analysis = analyse(this.raw, { now: nowSec(), tfs: this.settings.tfs });
+      this.analysis = analyse(this.raw, { now: nowSec(), tfs: this.settings.tfs, offset: this.settings.brokerOffset });
       this.analysisError = null;
     } catch (e) {
       console.error(e);

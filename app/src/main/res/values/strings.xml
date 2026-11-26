@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">XAUUSD Levels</string>
+    <string name="widget_symbol">XAU/USD</string>
+    <string name="widget_no_price">–</string>
+    <string name="widget_description">Gold price with the nearest support and resistance</string>
 </resources>

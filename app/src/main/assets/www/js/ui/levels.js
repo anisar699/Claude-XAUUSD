@@ -3,7 +3,7 @@
 import { store } from '../store.js';
 import { nearestAreas } from '../core/confluence.js';
 import { distanceTo, roleOf } from '../core/sr.js';
-import { ago, areaMeter, biasCell, meter, px, roleBadge, signed, tagChips } from './format.js';
+import { ago, areaMeter, biasCell, meter, px, roleBadge, signed, structureText, tagChips } from './format.js';
 import { priceRow } from './overview.js';
 
 // The tab strip is built once and then only updated in place, so a focused
@@ -40,7 +40,7 @@ function zoneRow(z, price, now) {
   const d = distanceTo(z, price);
   const range = z.hi - z.lo >= 0.05 ? `<span class="lv-range">${px(z.lo)} – ${px(z.hi)}</span>` : '';
   const touches = `${z.touches} ${z.touches === 1 ? 'touch' : 'touches'}`;
-  return `<div class="row">
+  return `<div class="row tap" role="button" tabindex="0" data-plan="${z.price}" data-lo="${z.lo}" data-hi="${z.hi}">
     ${roleBadge(role)}
     <div class="lv-main"><span class="lv-price">${px(z.price)}</span>${range}
       <div class="lv-sub">${touches} · last ${ago(z.lastT, now)}</div></div>
@@ -51,7 +51,8 @@ function zoneRow(z, price, now) {
 function tfCard(a, tf, price) {
   const zones = a.zones[tf] || [];
   const t = a.trend[tf];
-  const sub = t ? `${t.partial ? '' : biasCell(t.bias) + ' · '}RSI ${t.rsi == null ? '–' : t.rsi.toFixed(0)} · ATR ${px(t.atr)}` : '';
+  const st = a.structure && a.structure[tf];
+  const sub = t ? `${t.partial ? '' : biasCell(t.bias) + ' · '}${st ? structureText(st) + ' · ' : ''}RSI ${t.rsi == null ? '–' : t.rsi.toFixed(0)}` : '';
   if (!zones.length) {
     return `<div class="card"><div class="card-h"><h2>${tf} zones</h2></div><div class="empty">Not enough candles for this timeframe yet.</div></div>`;
   }
@@ -73,7 +74,7 @@ function tfCard(a, tf, price) {
 function areaRow(z, price, role) {
   const dist = role === 'resistance' ? z.lo - price : role === 'support' ? z.hi - price : 0;
   const range = z.hi - z.lo >= 0.05 ? `<span class="lv-range">${px(z.lo)} – ${px(z.hi)}</span>` : '';
-  return `<div class="row">
+  return `<div class="row tap" role="button" tabindex="0" data-plan="${z.price}" data-lo="${z.lo}" data-hi="${z.hi}">
     ${roleBadge(role)}
     <div class="lv-main"><span class="lv-price">${px(z.price)}</span>${range}${tagChips(z.tags, 8)}</div>
     <div class="lv-side"><div class="lv-dist">${role === 'inside' ? 'at price' : signed(dist)}</div>${areaMeter(z)}</div>

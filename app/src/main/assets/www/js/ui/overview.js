@@ -2,12 +2,12 @@
 
 import { store } from '../store.js';
 import { nearestAreas } from '../core/confluence.js';
-import { areaMeter, biasCell, px, roleBadge, signed, tagChips } from './format.js';
+import { areaMeter, biasCell, px, roleBadge, signed, structureCell, tagChips } from './format.js';
 
 function areaRow(z, price, role) {
   const dist = role === 'resistance' ? z.lo - price : role === 'support' ? z.hi - price : 0;
   const range = z.hi - z.lo >= 0.05 ? `<span class="lv-range">${px(z.lo)} – ${px(z.hi)}</span>` : '';
-  return `<div class="row">
+  return `<div class="row tap" role="button" tabindex="0" data-plan="${z.price}" data-lo="${z.lo}" data-hi="${z.hi}">
     ${roleBadge(role)}
     <div class="lv-main"><span class="lv-price">${px(z.price)}</span>${range}${tagChips(z.tags)}</div>
     <div class="lv-side"><div class="lv-dist">${role === 'inside' ? 'at price' : signed(dist)}</div>${areaMeter(z)}</div>
@@ -34,12 +34,12 @@ function trendTable(a) {
   const rows = store.settings.tfs
     .map((tf) => {
       const t = a.trend[tf];
-      if (!t) return `<tr><td class="k">${tf}</td><td colspan="3">Not enough candles yet</td></tr>`;
+      if (!t) return `<tr><td class="k">${tf}</td><td colspan="4">Not enough candles yet</td></tr>`;
       const bias = t.partial ? '<span class="bias neutral">–</span>' : biasCell(t.bias);
-      return `<tr><td class="k">${tf}</td><td>${bias}</td><td>${t.rsi == null ? '–' : t.rsi.toFixed(0)}</td><td>${px(t.atr)}</td></tr>`;
+      return `<tr><td class="k">${tf}</td><td>${bias}</td><td>${structureCell(a.structure && a.structure[tf])}</td><td>${t.rsi == null ? '–' : t.rsi.toFixed(0)}</td><td>${px(t.atr)}</td></tr>`;
     })
     .join('');
-  return `<table><thead><tr><th>TF</th><th>Trend</th><th>RSI 14</th><th>ATR 14</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table><thead><tr><th>TF</th><th>Trend</th><th>Structure</th><th>RSI</th><th>ATR</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function sessionTiles(a, price) {
@@ -55,6 +55,33 @@ function sessionTiles(a, price) {
     ${tile('Previous close', px(a.prevClose), a.prevClose == null ? '' : `${signed(a.prevClose - price)} from price`)}
     ${tile(`${label} range`, px(range), ofAtr)}
   </div>`;
+}
+
+const hm = (t) => {
+  const d = new Date(t * 1000);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+// Asia, London and New York: their latest window, high and low, opening range.
+function sessionsCard(a) {
+  const st = a.sessions;
+  if (!st) return '';
+  const rows = st.sessions
+    .filter((s) => s.window)
+    .map((s) => {
+      const w = s.window;
+      const status = w.active ? '<span class="pill hit">now</span>' : `<span class="pill">next ${hm(s.next ? s.next.start : w.start + 86400)}</span>`;
+      const hl = s.high == null ? '–' : `H ${px(s.high)} · L ${px(s.low)}${s.covered ? '' : ' (partial)'}`;
+      const or = s.opening ? `<div class="lv-sub">Opening range (first 30 min): ${px(s.opening.low)} – ${px(s.opening.high)}</div>` : '';
+      return `<div class="row sess"><div class="lv-main"><span class="lv-price">${s.name}</span> <span class="lv-range">${hm(w.start)}–${hm(w.end)}</span> ${status}
+        <div class="lv-sub">${w.active ? 'So far' : 'Last session'}: ${hl}</div>${or}</div></div>`;
+    })
+    .join('');
+  const now = st.active.length ? `${st.active.join(' + ')}${st.overlap ? ' overlap' : ''}` : 'between sessions';
+  return `<div class="card">
+      <div class="card-h"><h2>Sessions</h2><span>now: ${now}</span></div>
+      <div class="rows">${rows}</div>
+    </div>`;
 }
 
 export function renderOverview(el) {
@@ -74,9 +101,11 @@ export function renderOverview(el) {
       ${trendTable(a)}
     </div>
     <div class="card">
-      <div class="card-h"><h2>Session</h2><span>New York close days</span></div>
+      <div class="card-h"><h2>Day</h2><span>${store.settings.dayBoundary === 'utc' ? 'UTC days' : 'New York close days'}</span></div>
       ${sessionTiles(a, price)}
     </div>
+    ${sessionsCard(a)}
+    <p class="note">Tap a level to plan a trade from it. Structure: the last swing high (HH higher, LH lower) and low (HL higher, LL lower) and the latest break of structure (BOS), or a change of character (CHoCH) when it broke the other way. Session times are in your phone's time.</p>
     <p class="note">Tags show where a level comes from: a timeframe's swing zone, a pivot (D/W/M), a previous high or low (PDH, PWL…), or a round number.</p>
     <p class="note">Strength bars rank a level against the others shown now: how many swings and timeframes back it, and how recent they are. They are a ranking, not a probability: in testing on past data they did not tell which levels price would turn at, so treat every level as a place to watch, not a trade signal. A round number on its own is shown as a reference price, without bars.</p>`;
 }

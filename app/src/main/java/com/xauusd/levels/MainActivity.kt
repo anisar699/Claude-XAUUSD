@@ -165,6 +165,20 @@ class MainActivity : Activity() {
             web.postDelayed({ notifyPage() }, 300)
         }
 
+        /** A snapshot for the home-screen widget (see LevelsWidget). */
+        @JavascriptInterface
+        fun widget(json: String) = LevelsWidget.push(applicationContext, json)
+
+        /** Share text (the trade journal as CSV) through Android's share sheet. */
+        @JavascriptInterface
+        fun shareText(title: String, text: String) = runOnUiThread {
+            val send = Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, title.take(100))
+                .putExtra(Intent.EXTRA_TEXT, text.take(500_000))
+            open(Intent.createChooser(send, title.take(100)))
+        }
+
         @JavascriptInterface
         fun openNotificationSettings() = runOnUiThread {
             open(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))

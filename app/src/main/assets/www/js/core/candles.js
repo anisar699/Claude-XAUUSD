@@ -10,7 +10,7 @@
 //            boundaries are approximate
 //   asOf     the last candle of a fetch: when it was fetched (see extendWith)
 
-import { bucketEnd, bucketOf, firstOpenSlot, unexpectedGap, utcDayRepresentative } from './time.js';
+import { bucketEnd, bucketOf, firstOpenSlot, serverTimeMode, unexpectedGap, utcDayRepresentative } from './time.js';
 
 // Copy of a feed series with `gap` set on each candle that follows a hole.
 // `step` is the feed's candle length in seconds; holes shorter than
@@ -125,10 +125,11 @@ export function extendWith(series, finer, tf, finerSec = 60) {
 // history older than what the hourly series covers.
 //
 // Relabelling a UTC day cannot recover the real New York-close high, low and
-// close, so these days are marked `approx`.
+// close, so these days are marked `approx` (on a UTC server they are exact).
 export function utcDaysToServerDays(utcDays) {
+  const approx = serverTimeMode() !== 'utc';
   return aggregate(
-    utcDays.map((c) => ({ ...c, t: utcDayRepresentative(c.t), approx: true })),
+    utcDays.map((c) => (approx ? { ...c, t: utcDayRepresentative(c.t), approx: true } : { ...c, t: utcDayRepresentative(c.t) })),
     (t) => bucketOf('D1', t),
   );
 }

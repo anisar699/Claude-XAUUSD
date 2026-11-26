@@ -21,6 +21,7 @@ const C = {
   down: '#ef5350',
   pivot: '#3987e5',
   accent: '#d9a826',
+  session: '#a78bfa',
 };
 
 const LAYERS = [
@@ -28,6 +29,8 @@ const LAYERS = [
   { id: 'areas', label: 'Multi-TF', swatch: 'two dash' },
   { id: 'pivots', label: 'Daily pivots', swatch: 'pivot' },
   { id: 'ema', label: 'EMA 50 / 200', swatch: 'ema' },
+  { id: 'sessions', label: 'Sessions', swatch: 'sess' },
+  { id: 'structure', label: 'Structure', swatch: 'struct' },
 ];
 
 let root;
@@ -175,9 +178,11 @@ function renderLegend() {
   }
   // Say where each number comes from: candles from the candle feed, the
   // dashed Live line from the quote feed.
-  const live = store.priceIsLive() ? ` · Live line: Swissquote bid <b>${px(store.quote.bid)}</b>` : '';
+  const off = store.settings.brokerOffset;
+  const live = store.priceIsLive() ? ` · Live line: Swissquote bid${off ? ' + offset' : ''} <b>${px(store.liveBid())}</b>` : '';
   const gap = lastGap && !hoverText ? ' · <span class="warn">data missing in this candle</span>' : '';
-  el.innerHTML = `<b>${tf}</b> ${ohlc}${extra}<br><span class="src">${esc(store.provider().name)} bid candles${live}${gap}</span>`;
+  const shifted = off ? ` ${off > 0 ? '+' : '−'} ${Math.abs(off).toFixed(2)} broker offset` : '';
+  el.innerHTML = `<b>${tf}</b> ${ohlc}${extra}<br><span class="src">${esc(store.provider().name)} bid candles${shifted}${live}${gap}</span>`;
 }
 
 let chipSignature = '';
@@ -269,7 +274,7 @@ function syncLiveLine() {
     liveLine = null;
     return;
   }
-  const price = store.quote.bid;
+  const price = store.liveBid();
   if (!liveLine) {
     liveLine = candleSeries.createPriceLine({ price, color: C.accent, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: 'Live' });
   } else {
@@ -296,6 +301,24 @@ function desiredLines(a, tf, price) {
     near.above.forEach((z) => area(z, 'resistance'));
     near.at.forEach((z) => area(z, 'inside'));
     near.below.forEach((z) => area(z, 'support'));
+  }
+  if (L.sessions && a.sessions) {
+    for (const s of a.sessions.sessions) {
+      if (s.high == null) continue;
+      const style = s.window.active ? LC.LineStyle.Solid : LC.LineStyle.Dotted;
+      add({ price: s.high, color: C.session, lineWidth: 1, lineStyle: style, title: `${s.short} H` }, 2.2);
+      add({ price: s.low, color: C.session, lineWidth: 1, lineStyle: style, title: `${s.short} L` }, 2.2);
+      if (s.window.active && s.opening) {
+        add({ price: s.opening.high, color: C.session, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, title: `${s.short} OR H` }, 1.8);
+        add({ price: s.opening.low, color: C.session, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, title: `${s.short} OR L` }, 1.8);
+      }
+    }
+  }
+  const st = L.structure && a.structure ? a.structure[tf] : null;
+  if (st) {
+    add({ price: st.lastHigh.price, color: C.ink2, lineWidth: 1, lineStyle: LC.LineStyle.Dotted, title: st.high }, 2.6);
+    add({ price: st.lastLow.price, color: C.ink2, lineWidth: 1, lineStyle: LC.LineStyle.Dotted, title: st.low }, 2.6);
+    if (st.bos) add({ price: st.bos.level, color: C.ink, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, title: st.bos.choch ? 'CHoCH' : 'BOS' }, 2.4);
   }
   if (L.pivots && a.key.D.pivots) {
     const weight = { PP: 3.5, R1: 3, S1: 3, R2: 2, S2: 2, R3: 1.5, S3: 1.5 };

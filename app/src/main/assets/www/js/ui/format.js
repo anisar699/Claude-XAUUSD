@@ -52,6 +52,21 @@ export function meter(n) {
   return `<span class="meter" role="img" aria-label="Strength ${n} of 5">${bars}</span>`;
 }
 
+// Market structure for a timeframe: the last swing high and low labels and
+// the latest break of structure.
+export function structureCell(st) {
+  if (!st) return '<span class="st">–</span>';
+  const arrow = st.trend === 'up' ? '▲' : st.trend === 'down' ? '▼' : '◆';
+  const bos = st.bos ? `<div class="st-sub">${st.bos.choch ? 'CHoCH' : 'BOS'} ${st.bos.dir === 'up' ? '↑' : '↓'} ${px(st.bos.level)}</div>` : '';
+  return `<span class="st ${st.trend}">${arrow} ${st.high} ${st.low}</span>${bos}`;
+}
+
+export function structureText(st) {
+  if (!st) return '';
+  const bos = st.bos ? ` · ${st.bos.choch ? 'CHoCH' : 'BOS'} ${st.bos.dir === 'up' ? '↑' : '↓'} ${px(st.bos.level)}` : '';
+  return `${st.high} ${st.low}${bos}`;
+}
+
 // A multi-timeframe area: a round number on its own is a reference price, not
 // ranked; an area resting on an estimated pivot says so.
 export function areaMeter(z) {

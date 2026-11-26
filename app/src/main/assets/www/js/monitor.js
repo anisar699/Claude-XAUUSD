@@ -9,6 +9,10 @@ import { store } from './store.js';
 import { createAlertState, describeAlert, evaluateAlerts, gateAreas } from './core/alerts.js';
 import { nearestAreas } from './core/confluence.js';
 import { marketStatus } from './core/time.js';
+import { closedOnly } from './core/model.js';
+import { entryReached, planNumbers } from './core/planner.js';
+import { markHit, readHits, readPlans } from './data/trades.js';
+import { pushWidget } from './data/widget.js';
 import { appendAlerts } from './data/alertlog.js';
 
 // Provided by MonitorService: status(text) updates the ongoing notification,
@@ -68,6 +72,32 @@ function reportMarket(m) {
   bridge.marketState(m.open, m.nextChange * 1000);
 }
 
+// Saved trade plans: notify once when live price reaches a plan's entry. A
+// plan is armed only while price is on its waiting side (above a long's
+// entry, below a short's), so saving a plan at its entry does not fire it.
+const planArmed = new Map();
+
+function checkPlans(t, price) {
+  const hits = readHits();
+  const out = [];
+  for (const plan of readPlans()) {
+    if (hits[plan.id]) continue;
+    if (!entryReached(plan, price)) {
+      planArmed.set(plan.id, true);
+      continue;
+    }
+    if (!planArmed.get(plan.id) || !markHit(plan.id, t)) continue;
+    const n = planNumbers(plan);
+    const tp = n.targets.length ? ` · TP ${n.targets[0].price.toFixed(2)} (${n.targets[0].rr.toFixed(1)}R)` : '';
+    out.push({
+      key: `plan:${plan.id}`,
+      title: `Plan entry reached: ${plan.dir === 'long' ? 'BUY' : 'SELL'} ${plan.entry.toFixed(2)}`,
+      body: `Price ${price.toFixed(2)} · SL ${plan.sl.toFixed(2)}${tp}${plan.lots ? ` · ${plan.lots} lots` : ''}`,
+    });
+  }
+  return out;
+}
+
 function paused(text, kind = 'paused') {
   beat(kind);
   setStatus(text);
@@ -77,12 +107,15 @@ function evaluate() {
   const t = nowSec();
   const m = marketStatus(t);
   reportMarket(m);
+  pushWidget(store, bridge);
   const a = store.analysis;
   if (!a) return paused(store.status.error ? 'Cannot load market data · retrying' : 'Loading market data…', 'warmup');
   // Alerts need a live price and current minute candles. Without both, say
   // so rather than judge levels against old numbers.
   if (!m.open) return paused(`Market closed · last ${px(a.lastPrice)} · alerts paused`);
   if (!store.priceIsLive()) return paused('No live price · alerts paused');
+  // Plan entries need only the live price.
+  send(t, checkPlans(t, store.price()));
   const m1 = minuteAt(t);
   if (m1 == null || t - m1 > STALE_CANDLES_SEC) return paused('Candles not updating · alerts paused');
 
@@ -98,13 +131,27 @@ function evaluate() {
   const { allowed } = gateAreas(a.conf, { ready, badFeeds, prefs: store.settings.alerts });
 
   const price = store.price();
-  const alerts = evaluateAlerts(state, { now: t, price, areas: allowed, tol: a.tol, atrH1: a.atrH1, prefs: store.settings.alerts });
+  // Closed candles for close-confirmed breaks and sweeps.
+  const ctf = store.settings.alerts.candleTf === 'H1' ? 'H1' : 'M15';
+  const candles = closedOnly(a.series[ctf] || [], ctf, t).slice(-2);
+  const alerts = evaluateAlerts(state, {
+    now: t,
+    price,
+    areas: allowed,
+    tol: a.tol,
+    atrH1: a.atrH1,
+    prefs: store.settings.alerts,
+    candles,
+    candleSec: ctf === 'H1' ? 3600 : 900,
+  });
   const waiting = enabled.filter((tf) => !ready.includes(tf));
   beat('running');
   setStatus(summary(a, price) + (waiting.length ? ` · ${waiting.join(', ')} not ready` : ''));
-  if (!alerts.length) return;
+  send(t, alerts.map(describeAlert));
+}
 
-  const texts = alerts.map(describeAlert);
+function send(t, texts) {
+  if (!texts.length) return;
   appendAlerts(texts.map((x) => ({ t, title: x.title, body: x.body })));
   if (!bridge) return;
   if (texts.length === 1) bridge.alert(texts[0].title, texts[0].body, texts[0].key);

@@ -7,12 +7,15 @@ import { renderOverview } from './ui/overview.js';
 import { initLevels, renderLevels, showLevels } from './ui/levels.js';
 import { initChart, onChartQuote, renderChart } from './ui/chart.js';
 import { initSettings, renderSettings, renderSettingsStatus } from './ui/settings.js';
+import { initTrades, planFromLevel, refreshTrades, renderTrades, setNavigator } from './ui/trades.js';
+import { pushWidget } from './data/widget.js';
 
 const $ = (id) => document.getElementById(id);
 const views = {
   overview: $('view-overview'),
   levels: $('view-levels'),
   chart: $('view-chart'),
+  trades: $('view-trades'),
   settings: $('view-settings'),
 };
 let active = 'overview';
@@ -21,6 +24,7 @@ function renderActive() {
   if (active === 'overview') renderOverview(views.overview);
   else if (active === 'levels') renderLevels(views.levels);
   else if (active === 'chart') renderChart();
+  else if (active === 'trades') renderTrades();
   else renderSettings();
 }
 
@@ -127,6 +131,11 @@ store.on((type) => {
   }
   renderHeader();
   renderBanner();
+  if (type === 'quote' || type === 'data') pushWidget(store);
+  if (active === 'trades') {
+    if (type === 'quote' || type === 'data') refreshTrades();
+    return;
+  }
   if (type === 'quote') {
     if (active === 'overview' || active === 'levels') refreshLists();
     else if (active === 'chart') onChartQuote();
@@ -161,6 +170,15 @@ window.__onBack = () => {
 initLevels(views.levels);
 initChart(views.chart);
 initSettings(views.settings);
+initTrades(views.trades);
+setNavigator(() => show('trades'));
+// Tap a level (Overview or Levels) to plan a trade from it.
+for (const v of [views.overview, views.levels]) {
+  v.addEventListener('click', (e) => {
+    const row = e.target.closest('[data-plan]');
+    if (row) planFromLevel(Number(row.dataset.lo), Number(row.dataset.hi), Number(row.dataset.plan));
+  });
+}
 show('overview');
 renderHeader();
 renderBanner();

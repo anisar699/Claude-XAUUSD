@@ -271,6 +271,10 @@ class MonitorService : Service() {
             }
         }
 
+        /** A snapshot for the home-screen widget (see LevelsWidget). */
+        @JavascriptInterface
+        fun widget(json: String) = LevelsWidget.push(applicationContext, json)
+
         /** kind: running, warmup or paused. Proves the page's checks are running. */
         @JavascriptInterface
         fun heartbeat(kind: String) {

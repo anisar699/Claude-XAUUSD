@@ -7,6 +7,8 @@ import { atr, lastValue, trendOf } from './indicators.js';
 import { computeZones } from './sr.js';
 import { keyLevels } from './pivots.js';
 import { buildLevelPool, confluence } from './confluence.js';
+import { marketStructure } from './structure.js';
+import { sessionStats } from './sessions.js';
 
 // Candle length of each raw intraday feed, for finding holes in it.
 const FEED_STEP = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600 };
@@ -71,7 +73,19 @@ export const READY_MIN = { M5: 120, M15: 120, M30: 120, H1: 120, H4: 60, D1: 60,
 // walk-forward tests.
 export const AREA_HALF_WIDTH_ATR = 0.1;
 
-export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HALF_WIDTH_ATR }) {
+// Every price moved by `offset` (the broker's price minus the feed's), so
+// levels, candles and pivots read in the broker's own prices.
+export function shiftRaw(raw, offset) {
+  if (!offset) return raw;
+  const out = {};
+  for (const [k, s] of Object.entries(raw)) {
+    out[k] = (s || []).map((c) => ({ ...c, o: c.o + offset, h: c.h + offset, l: c.l + offset, c: c.c + offset }));
+  }
+  return out;
+}
+
+export function analyse(rawIn, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HALF_WIDTH_ATR, offset = 0 }) {
+  const raw = shiftRaw(rawIn, offset);
   const series = buildSeries(raw);
   const last = latestObservation(raw, now);
   if (!last) return null;
@@ -86,6 +100,7 @@ export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HA
 
   const zones = {};
   const trend = {};
+  const structure = {};
   const closedCount = {};
   // Timeframes with missing data among their newest candles.
   const gaps = [];
@@ -94,6 +109,7 @@ export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HA
     closedCount[tf] = closed.length;
     zones[tf] = computeZones(closed, tf, zoneOptions);
     trend[tf] = trendOf(series[tf]);
+    structure[tf] = marketStructure(closed.slice(-400));
     if (series[tf].slice(-3).some((c) => c.gap)) gaps.push(tf);
   }
   // ready: enough closed history, and current.
@@ -116,9 +132,11 @@ export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HA
   // last session's own change instead of a meaningless zero.
   const d1 = series.D1;
   const prevClose = d1.length > 1 ? d1[d1.length - 2].c : null;
+  const sessions = sessionStats([series.M1, series.M5, series.M15], Math.min(now, last.at));
 
   return {
     now,
+    offset,
     lastPrice: price,
     lastT: last.t,
     lastAt: last.at,
@@ -126,6 +144,8 @@ export function analyse(raw, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_HA
     series,
     zones,
     trend,
+    structure,
+    sessions,
     key,
     conf,
     tol,

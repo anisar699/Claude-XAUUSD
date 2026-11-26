@@ -101,7 +101,19 @@ function alertsCard() {
       <label class="opt"><input type="checkbox" data-alert="approach"${p.approach ? ' checked' : ''}>
         <span><span class="opt-t">Near a level</span><div class="opt-d">Price comes within the distance below of an area, after being away from it.</div></span></label>
       <label class="opt"><input type="checkbox" data-alert="breaks"${p.breaks ? ' checked' : ''}>
-        <span><span class="opt-t">Through a level</span><div class="opt-d">Price moves clean through an area to the other side. Judged on the live price, not a candle close.</div></span></label>
+        <span><span class="opt-t">Through a level</span><div class="opt-d">Price moves clean through an area to the other side.</div></span></label>
+      <div class="field" style="padding-top:8px">
+        <label class="lbl">A break counts when</label>
+        <div class="seg">${chip('data-breakon', 'live', 'Live price is through', p.breakOn !== 'close')}${chip('data-breakon', 'close', 'A candle closes beyond', p.breakOn === 'close')}</div>
+      </div>
+      <label class="opt"><input type="checkbox" data-alert="retests"${p.retests ? ' checked' : ''}>
+        <span><span class="opt-t">Break and retest</span><div class="opt-d">Price comes back to an area it broke in the last 48 hours, from the new side: broken resistance tested as support, or the other way round.</div></span></label>
+      <label class="opt"><input type="checkbox" data-alert="sweeps"${p.sweeps ? ' checked' : ''}>
+        <span><span class="opt-t">Liquidity sweep</span><div class="opt-d">A candle wicks beyond an area and closes back on the side it came from: a possible stop hunt.</div></span></label>
+      <div class="field" style="padding-top:8px">
+        <label class="lbl">Candles for close-confirmed breaks and sweeps</label>
+        <div class="seg">${chip('data-candletf', 'M15', '15 minutes', p.candleTf !== 'H1')}${chip('data-candletf', 'H1', '1 hour', p.candleTf === 'H1')}</div>
+      </div>
       <label class="opt"><input type="checkbox" data-alert="roundOnly"${p.roundOnly ? ' checked' : ''}>
         <span><span class="opt-t">Round numbers on their own</span><div class="opt-d">Also alert on areas made only of a round number ($50 / $100 steps) with no swing zone or pivot there.</div></span></label>
       <div class="field" style="padding-top:10px">
@@ -113,7 +125,8 @@ function alertsCard() {
         <div class="seg">${DISTANCE_CHOICES.map((d) => chip('data-distance', d, d === 'auto' ? `Auto ($${auto.toFixed(1)})` : `$${d}`, p.distance === d)).join('')}</div>
       </div>
       <div id="al-recent">${lastAlertRecent}</div>
-      <p class="note" style="padding-top:10px">All alerts pause while the market is closed, the price is not live or the minute candles stop updating. A level also waits while a timeframe it comes from is still loading its history, is out of date, or its feed has a problem; levels from other timeframes keep working. Monitoring shows a permanent notification and keeps the phone awake only while the market is open. It does not restart by itself after the phone reboots or the app is updated.</p>
+      <p class="note" style="padding-top:10px">Tested on two years of hourly and ten months of 15-minute gold data, sweeps and retests at these areas led to a move in the expected direction about as often as the same events at random levels. They tell you what price is doing at a level; they are not a signal on their own.</p>
+      <p class="note">All alerts pause while the market is closed, the price is not live or the minute candles stop updating. A level also waits while a timeframe it comes from is still loading its history, is out of date, or its feed has a problem; levels from other timeframes keep working. Monitoring shows a permanent notification and keeps the phone awake only while the market is open. It does not restart by itself after the phone reboots or the app is updated.</p>
     </div>`;
 }
 
@@ -150,6 +163,38 @@ function statusBlock() {
     ${st.quoteError && q ? `<div class="kv"><span>Live price error</span><span>${esc(st.quoteError)}</span></div>` : ''}`;
 }
 
+// The broker's prices: an offset to the feed's, and when the day starts.
+function brokerCard() {
+  const s = store.settings;
+  const off = s.brokerOffset;
+  const live = store.priceIsLive();
+  const feed = live ? store.quote.bid : null;
+  return `<div class="card">
+    <div class="card-h"><h2>Your broker</h2><span>match your MT4 / MT5 chart</span></div>
+    <div class="kv"><span>Price offset</span><span><b>${off >= 0 ? '+' : '−'}${Math.abs(off).toFixed(2)}</b> added to every price</span></div>
+    <div class="grid2" style="padding-top:8px">
+      <label class="fld"><span class="lbl">Your broker's bid right now</span><input id="br-bid" class="inp" type="number" inputmode="decimal" step="0.01" placeholder="${feed == null ? 'needs a live price' : px(feed + off)}"></label>
+      <label class="fld"><span class="lbl">Or set the offset ($)</span><input id="br-off" class="inp" type="number" inputmode="decimal" step="0.01" value="${off}"></label>
+    </div>
+    <div class="btns"><button class="btn" data-act="br-cal"${live ? '' : ' disabled'}>Match my broker</button><button class="btn" data-act="br-set">Use this offset</button></div>
+    <div class="field" style="padding-top:10px">
+      <label class="lbl">Your broker's day (and H4, week, month) starts at</label>
+      <div class="seg">
+        <button class="chip${s.dayBoundary !== 'utc' ? ' on' : ''}" data-day="ny">17:00 New York (GMT+2/+3 servers)</button>
+        <button class="chip${s.dayBoundary === 'utc' ? ' on' : ''}" data-day="utc">00:00 UTC (GMT+0 servers)</button>
+      </div>
+    </div>
+    <div class="field">
+      <label class="lbl" for="acc-contract">Ounces per lot (trade planner)</label>
+      <input id="acc-contract" class="inp" type="number" inputmode="decimal" step="1" value="${s.account.contract}">
+    </div>
+    <div class="msg" id="br-msg" role="status">${esc(brokerMsg)}</div>
+    <p class="note">Feeds and brokers quote gold a little differently. Type the bid your broker shows right now and tap "Match my broker": levels, candles, the chart and alerts then read in your broker's prices. Most brokers' servers run on GMT+2/+3, so their day starts at 17:00 New York. Brokers on GMT+0 (for example Exness) start it at 00:00 UTC. XAUUSD is usually 100 oz per lot; check your broker's contract size.</p>
+  </div>`;
+}
+
+let brokerMsg = '';
+
 export function renderSettings() {
   if (!root || root.hidden) return;
   const s = store.settings;
@@ -158,6 +203,7 @@ export function renderSettings() {
 
   root.innerHTML = `
     ${alertsCard()}
+    ${brokerCard()}
     <div class="card">
       <div class="card-h"><h2>Timeframes</h2><span>zones, trend, multi-TF areas</span></div>
       ${ANALYSIS_TFS.map(
@@ -200,7 +246,7 @@ export function renderSettings() {
     </div>
 
     <div class="card">
-      <div class="card-h"><h2>About</h2><span>version 1.5.1</span></div>
+      <div class="card-h"><h2>About</h2><span>version 1.6.0</span></div>
       <p class="note">This app calculates support and resistance from price history. It does not give buy or sell signals and is not financial advice. Prices come from third-party feeds and can differ from your broker by a small amount.</p>
       <p class="note">Candles: Dukascopy (personal use) or Twelve Data. Live price: Swissquote public quotes. Charts: TradingView Lightweight Charts™ (Apache 2.0).</p>
     </div>`;
@@ -261,6 +307,9 @@ export function initSettings(el) {
     const t = e.target;
     if (t.matches('input[data-alert]')) {
       setAlertPrefs({ [t.dataset.alert]: t.checked });
+    } else if (t.id === 'acc-contract') {
+      const v = Number(t.value);
+      if (v > 0) store.setSettings({ account: { ...store.settings.account, contract: v } });
     } else if (t.matches('input[data-tf]')) {
       const set = new Set(store.settings.tfs);
       if (t.checked) set.add(t.dataset.tf);
@@ -294,7 +343,15 @@ export function initSettings(el) {
     const act = e.target.closest('[data-act]');
     const strength = e.target.closest('[data-strength]');
     const distance = e.target.closest('[data-distance]');
-    if (strength) {
+    const breakOn = e.target.closest('[data-breakon]');
+    const candleTf = e.target.closest('[data-candletf]');
+    const day = e.target.closest('[data-day]');
+    if (breakOn) setAlertPrefs({ breakOn: breakOn.dataset.breakon });
+    else if (candleTf) setAlertPrefs({ candleTf: candleTf.dataset.candletf });
+    else if (day) {
+      store.setSettings({ dayBoundary: day.dataset.day });
+      renderSettings();
+    } else if (strength) {
       setAlertPrefs({ minStrength: Number(strength.dataset.strength) });
     } else if (distance) {
       const d = distance.dataset.distance;
@@ -316,6 +373,27 @@ export function initSettings(el) {
       } else if (a === 'test') runTest();
       else if (a === 'refresh') store.sync();
       else if (a === 'clear') store.clearCache();
+      else if (a === 'br-cal') {
+        const v = Number(root.querySelector('#br-bid').value);
+        if (!store.priceIsLive() || !(v > 0)) brokerMsg = 'Type your broker\'s current bid while the price here is live.';
+        else {
+          const off = Math.round((v - store.quote.bid) * 100) / 100;
+          if (Math.abs(off) > 50) brokerMsg = 'That is more than $50 away from the feed: check the number.';
+          else {
+            store.setSettings({ brokerOffset: off });
+            brokerMsg = `Offset set to ${off >= 0 ? '+' : ''}${off.toFixed(2)}.`;
+          }
+        }
+        renderSettings();
+      } else if (a === 'br-set') {
+        const off = Number(root.querySelector('#br-off').value);
+        if (!Number.isFinite(off) || Math.abs(off) > 50) brokerMsg = 'The offset must be between −50 and +50.';
+        else {
+          store.setSettings({ brokerOffset: Math.round(off * 100) / 100 });
+          brokerMsg = 'Offset saved.';
+        }
+        renderSettings();
+      }
       else if (a === 'save-key') {
         const key = root.querySelector('#td-key').value.trim();
         if (!key) return setMessage('Enter your Twelve Data API key first.');

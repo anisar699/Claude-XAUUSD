@@ -283,7 +283,7 @@ tr.pp td { background: var(--surface-2); }
 .nav {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   background: var(--surface);
   border-top: 1px solid var(--hair);
   padding-bottom: env(safe-area-inset-bottom);
@@ -302,3 +302,31 @@ tr.pp td { background: var(--surface-2); }
 }
 .nav svg { width: 22px; height: 22px; fill: currentColor; }
 .nav button.on { color: var(--accent); }
+
+/* ---- 1.6: planner, journal, sessions, structure --------------------------- */
+
+.row.tap { cursor: pointer; }
+.row.tap:active { background: var(--hair); }
+.row.sess { grid-template-columns: minmax(0, 1fr); }
+.row.plan, .row.trade { grid-template-columns: minmax(0, 1fr) auto; }
+button.row.trade { width: 100%; background: none; border: 0; border-bottom: 1px solid var(--hair); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pill { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 9px; font-size: 11px; color: var(--muted); border: 1px solid var(--hair); }
+.pill.hit { color: var(--accent); border-color: var(--accent); }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; padding: 4px 14px 10px; }
+.card > .fld, .jform > .fld { padding: 0 14px 10px; }
+.fld { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fld .lbl { font-size: 12px; color: var(--muted); }
+.fld .inp { width: 100%; box-sizing: border-box; }
+.jform .field { padding: 0 14px 10px; }
+.btn.sm { min-height: 30px; padding: 3px 10px; font-size: 12px; }
+.btn[disabled] { opacity: 0.45; }
+.btns-col { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.st { white-space: nowrap; }
+.st.up { color: var(--up); }
+.st.down { color: var(--down); }
+.st-sub { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.swatch.sess { border-top: 2px solid #a78bfa; }
+.swatch.struct { border-top: 2px dotted var(--ink-2); }
+.note.warn, .warn { color: var(--down); }
+b.up { color: var(--up); }
+b.down { color: var(--down); }

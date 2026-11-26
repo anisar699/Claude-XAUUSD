@@ -66,12 +66,15 @@ test('break needs price clearly through the far side', () => {
   assert.deepEqual(run(s, 50, 4003, areas), [], 'no repeat');
   // Back below: a second break, but inside the 5-minute cooldown.
   assert.deepEqual(run(s, 60, 3997, areas), []);
-  // The role has flipped: the area is now support, approached from above.
+  // The role has flipped: the area is now support, approached from above:
+  // a retest of the broken level.
   run(s, 400, 4010, areas);
   const retest = run(s, 1000, 4002, areas);
-  assert.equal(retest[0].kind, 'approach');
+  assert.equal(retest[0].kind, 'retest');
   assert.equal(retest[0].role, 'support');
+  assert.equal(describeAlert(retest[0]).title, 'Retest of 4000.00: broken resistance, now support');
 });
+
 
 test('weak areas are ignored and each kind can be switched off', () => {
   const s = createAlertState();
@@ -147,4 +150,83 @@ test('an alert after a long pause says so (audit R05)', () => {
   const live = run(s2, 20, 4005, [area(4000)]);
   assert.equal(live[0].since, null);
   assert.doesNotMatch(describeAlert(live[0]).body, /paused/);
+});
+
+// ---- 1.6: close-confirmed breaks, retests, sweeps ----------------------------
+
+const M15 = 900;
+const candle = (t, o, h, l, c) => ({ t, o, h, l, c });
+function runC(state, now, price, areas, bars, extra = {}) {
+  return evaluateAlerts(state, { ...base, prefs: { ...prefs, ...extra }, now, price, areas, candles: bars, candleSec: M15 });
+}
+
+test('with breakOn close, a wick through is not a break; a candle close beyond is', () => {
+  const s = createAlertState();
+  const areas = [area(4000)];
+  const c0 = candle(0, 3985, 3990, 3984, 3988);
+  runC(s, 900, 3988, areas, [c0], { breakOn: 'close' });
+  // Live price pokes through, no alert.
+  assert.deepEqual(runC(s, 950, 4003, areas, [c0], { breakOn: 'close' }), []);
+  // The candle closes back below: still nothing (but it is a sweep, see below).
+  const c1 = candle(900, 3988, 4003, 3987, 3995);
+  assert.ok(!runC(s, 1800, 3995, areas, [c0, c1], { breakOn: 'close', sweeps: false }).length);
+  // A candle that closes above the area: one break, labelled with its close.
+  const c2 = candle(1800, 3995, 4006, 3994, 4004);
+  const hit = runC(s, 2700, 4004, areas, [c1, c2], { breakOn: 'close' });
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].kind, 'break');
+  assert.equal(hit[0].close, 4004);
+  assert.equal(describeAlert(hit[0]).title, 'M15 closed above 4000.00');
+  // The same candle seen again does not repeat it.
+  assert.deepEqual(runC(s, 2710, 4004.5, areas, [c1, c2], { breakOn: 'close' }), []);
+});
+
+test('a sweep: a wick beyond the area and a close back on the side it came from', () => {
+  const s = createAlertState();
+  const areas = [area(4000)];
+  const c0 = candle(0, 3985, 3990, 3984, 3988);
+  runC(s, 900, 3988, areas, [c0]);
+  const c1 = candle(900, 3988, 4003, 3987, 3995);
+  const hit = runC(s, 1800, 3995, areas, [c0, c1]);
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].kind, 'sweep');
+  assert.equal(hit[0].direction, 'up');
+  assert.match(describeAlert(hit[0]).title, /^Sweep above 4000.00/);
+  assert.match(describeAlert(hit[0]).body, /M15 wick to 4003.00, closed 3995.00 back below/);
+  // Support swept from above.
+  const s2 = createAlertState();
+  const d0 = candle(0, 4012, 4014, 4010, 4012);
+  runC(s2, 900, 4012, areas, [d0]);
+  const d1 = candle(900, 4012, 4013, 3997, 4002);
+  const hit2 = runC(s2, 1800, 4002, areas, [d0, d1]);
+  assert.equal(hit2[0].kind, 'sweep');
+  assert.equal(hit2[0].direction, 'down');
+  // Switched off: nothing.
+  const s3 = createAlertState();
+  runC(s3, 900, 3988, areas, [c0], { sweeps: false });
+  assert.deepEqual(runC(s3, 1800, 3995, areas, [c0, c1], { sweeps: false }), []);
+});
+
+test('a candle that closed before the area was first seen raises nothing', () => {
+  const s = createAlertState();
+  const areas = [area(4000)];
+  const c1 = candle(900, 3988, 4003, 3987, 3995);
+  // First sight comes after that candle closed (at 1800).
+  runC(s, 2000, 3995, areas, [c1]);
+  assert.deepEqual(runC(s, 2005, 3995, areas, [c1]), []);
+});
+
+test('retests can be switched off and expire after 48 hours', () => {
+  const areas = [area(4000)];
+  const go = (extra, wait) => {
+    const s = createAlertState();
+    runC(s, 0, 3980, areas, [], extra);
+    runC(s, 10, 4010, areas, [], extra); // live break up
+    runC(s, 20, 4010, areas, [], extra);
+    return runC(s, 20 + wait, 4002, areas, [], extra);
+  };
+  assert.equal(go({}, 600)[0].kind, 'retest');
+  assert.equal(go({ retests: false }, 600)[0].kind, 'approach');
+  assert.equal(go({}, 49 * 3600)[0].kind, 'approach');
+  assert.deepEqual(go({ retests: true, approach: false }, 49 * 3600), []);
 });
