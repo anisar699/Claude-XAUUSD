@@ -35,7 +35,7 @@ say so next to the switches.
 
 ## Checks
 
-- **Unit tests:** 85 JavaScript and 5 Kotlin tests pass. The new ones cover
+- **Unit tests:** 86 JavaScript and 5 Kotlin tests pass. The new ones cover
   sessions (including DST), market structure, the UTC day boundary, the
   broker offset, planner maths, position sizing, journal statistics and CSV,
   the three new alert kinds, plan entry alerts in the monitor, and the widget
@@ -46,6 +46,17 @@ say so next to the switches.
 - **Earlier checks:** the chart, offline, weekend and Twelve Data checks were
   rerun.
 - **Lint:** no errors.
+- **Android 11 emulator (WebView 83):** 1.6.0 installed over 1.5.1. Then:
+  - Its first build showed an empty screen. A `||=` operator in the new
+    planner code needs Chrome 85, so on WebView 83 no module loaded. This
+    can happen on older phones too. It was replaced, and a new test
+    (`tests/compat.test.mjs`) rejects syntax newer than Chrome 83.
+  - After the fix, the app ran on live prices. Tapping a level opened the
+    planner, and background monitoring ran with its status in the
+    notification.
+  - The widget, placed on the home screen, showed the price, change, nearest
+    R and S, and "Live · Asia". It kept updating from the monitor after the
+    app was closed.
 
 ## Not covered
 
