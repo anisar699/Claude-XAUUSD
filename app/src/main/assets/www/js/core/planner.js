@@ -95,7 +95,11 @@ export function journalStats(trades, contract = 100) {
   const closed = trades.filter((t) => Number.isFinite(t.exit));
   const by = (key) => {
     const groups = {};
-    for (const t of closed) (groups[t[key] || '–'] ||= []).push(t);
+    for (const t of closed) {
+      const k = t[key] || '–';
+      if (!groups[k]) groups[k] = [];
+      groups[k].push(t);
+    }
     return Object.entries(groups)
       .map(([k, list]) => ({ key: k, ...summary(list, contract) }))
       .sort((a, b) => b.n - a.n);
