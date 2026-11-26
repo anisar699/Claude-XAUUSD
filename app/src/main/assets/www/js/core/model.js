@@ -26,8 +26,10 @@ export function buildSeries(raw) {
   const H1 = extendWith(g.H1, M1, 'H1');
   const H4 = aggregateTf(H1, 'H4', 3600);
   const D1 = stitchDays(utcDaysToServerDays(raw.D1U || []), aggregateTf(H1, 'D1', 3600));
-  const W1 = aggregateTf(D1, 'W1');
-  const MN = aggregateTf(D1, 'MN');
+  // Weeks and months know when their first day should be, so a history that
+  // starts partway into one marks it partial (V16-12).
+  const W1 = aggregateTf(D1, 'W1', 'D1');
+  const MN = aggregateTf(D1, 'MN', 'D1');
   return { M1, M5, M15, M30, H1, H4, D1, W1, MN };
 }
 
@@ -132,7 +134,14 @@ export function analyse(rawIn, { now, tfs, zoneOptions, areaHalfWidthAtr = AREA_
   // last session's own change instead of a meaningless zero.
   const d1 = series.D1;
   const prevClose = d1.length > 1 ? d1[d1.length - 2].c : null;
-  const sessions = sessionStats([series.M1, series.M5, series.M15], Math.min(now, last.at));
+  const sessions = sessionStats(
+    [
+      { candles: series.M1, step: 60 },
+      { candles: series.M5, step: 300 },
+      { candles: series.M15, step: 900 },
+    ],
+    Math.min(now, last.at),
+  );
 
   return {
     now,

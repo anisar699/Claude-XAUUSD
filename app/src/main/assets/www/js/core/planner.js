@@ -51,22 +51,27 @@ export function planNumbers(plan, { lots = 0, contract = 100 } = {}) {
   };
 }
 
-// Has price reached a waiting plan's entry? A long fills when price comes
-// down to its entry, a short when price rises to it.
-export function entryReached(plan, price) {
-  return plan.dir === 'long' ? price <= plan.entry : price >= plan.entry;
+// Has price touched a waiting plan's entry? A buy is filled at the ask, so a
+// long counts when the ask comes down to its entry; a sell is filled at the
+// bid, so a short counts when the bid rises to it. Without an ask, the bid is
+// used for both. This is a price touch, not an order: the app places none.
+export function entryReached(plan, bid, ask = bid) {
+  return plan.dir === 'long' ? ask <= plan.entry : bid >= plan.entry;
 }
 
 // ---- journal -------------------------------------------------------------------
 
-// A closed trade's result: R multiple (when it had a stop) and money.
+// A closed trade's result: R multiple (when it had a stop) and money. Money
+// uses the contract size stored with the trade; `contract` is only for
+// trades without one.
 export function tradeResult(t, contract = 100) {
   const sign = t.dir === 'long' ? 1 : -1;
   const move = sign * (t.exit - t.entry);
   const risk = Number.isFinite(t.sl) ? Math.abs(t.entry - t.sl) : NaN;
+  const lots = Number.isFinite(t.lots) && t.lots > 0 ? t.lots : 0;
   return {
     r: risk > 0 ? move / risk : null,
-    pnl: move * (t.lots || 0) * contract,
+    pnl: move * lots * (t.contract > 0 ? t.contract : contract),
     win: move > 0,
   };
 }
@@ -107,18 +112,35 @@ export function journalStats(trades, contract = 100) {
   return { all: summary(closed, contract), open: trades.length - closed.length, bySetup: by('setup'), bySession: by('session'), byDir: by('dir') };
 }
 
-// Trades as CSV, for a spreadsheet.
+// Trades as CSV, for a spreadsheet. Text a spreadsheet could read as a
+// formula (starting with = + - @, a tab or a return) is prefixed with an
+// apostrophe; numbers are written as plain numbers.
 export function journalCsv(trades, contract = 100) {
-  const head = ['opened_utc', 'direction', 'entry', 'stop', 'target', 'exit', 'lots', 'setup', 'timeframe', 'session', 'r', 'pnl', 'notes'];
-  const cell = (v) => {
+  const head = ['opened_utc', 'direction', 'entry', 'stop', 'target', 'exit', 'lots', 'oz_per_lot', 'setup', 'timeframe', 'session', 'r', 'pnl', 'notes'];
+  const quote = (s) => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+  const num = (v) => (Number.isFinite(v) ? String(v) : '');
+  const text = (v) => {
     const s = v == null ? '' : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    return quote(/^[=+\-@\t\r]/.test(s) ? `'${s}` : s);
   };
   const rows = trades.map((t) => {
     const r = Number.isFinite(t.exit) ? tradeResult(t, contract) : { r: null, pnl: null };
-    return [new Date(t.t * 1000).toISOString().slice(0, 16).replace('T', ' '), t.dir, t.entry, t.sl, t.tp, t.exit, t.lots, t.setup, t.tf, t.session, r.r == null ? '' : r.r.toFixed(2), r.pnl == null ? '' : r.pnl.toFixed(2), t.notes]
-      .map(cell)
-      .join(',');
+    return [
+      new Date(t.t * 1000).toISOString().slice(0, 16).replace('T', ' '),
+      text(t.dir),
+      num(t.entry),
+      num(t.sl),
+      num(t.tp),
+      num(t.exit),
+      num(t.lots),
+      num(t.contract > 0 ? t.contract : contract),
+      text(t.setup),
+      text(t.tf),
+      text(t.session),
+      r.r == null ? '' : r.r.toFixed(2),
+      r.pnl == null ? '' : r.pnl.toFixed(2),
+      text(t.notes),
+    ].join(',');
   });
   return [head.join(','), ...rows].join('\n');
 }

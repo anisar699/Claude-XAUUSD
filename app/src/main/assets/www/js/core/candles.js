@@ -28,8 +28,9 @@ export function markGaps(series, step, minMissing = step) {
 
 // Group candles into buckets. Flags carry over: a bucket built from a candle
 // with a gap or an approximate day has the same flag. With `step` (the input
-// candle length) and `tf`, the first bucket is marked partial when the input
-// starts after that bucket's first trading moment.
+// candle length in seconds, or 'D1' for days) and `tf`, the first bucket is
+// marked partial when the input starts after that bucket's first trading
+// moment (for days: after its first trading day).
 export function aggregate(candles, bucketFn, step, tf) {
   const out = [];
   let cur = null;
@@ -52,8 +53,14 @@ export function aggregate(candles, bucketFn, step, tf) {
   }
   if (out.length && step && tf) {
     const first = out[0];
-    const open = firstOpenSlot(first.t, step, bucketEnd(tf, first.t));
-    if (open != null && candles[0].t > open) first.partial = true;
+    const end = bucketEnd(tf, first.t);
+    if (step === 'D1') {
+      const open = firstOpenSlot(first.t, 3600, end);
+      if (open != null && candles[0].t > bucketOf('D1', open)) first.partial = true;
+    } else {
+      const open = firstOpenSlot(first.t, step, end);
+      if (open != null && candles[0].t > open) first.partial = true;
+    }
   }
   return out;
 }

@@ -169,14 +169,31 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun widget(json: String) = LevelsWidget.push(applicationContext, json)
 
-        /** Share text (the trade journal as CSV) through Android's share sheet. */
+        /**
+         * Share a file (the trade journal as CSV) through Android's share
+         * sheet, whole: written to cache/exports and handed over through
+         * [ExportProvider] with a temporary read permission.
+         */
         @JavascriptInterface
-        fun shareText(title: String, text: String) = runOnUiThread {
-            val send = Intent(Intent.ACTION_SEND)
-                .setType("text/plain")
-                .putExtra(Intent.EXTRA_SUBJECT, title.take(100))
-                .putExtra(Intent.EXTRA_TEXT, text.take(500_000))
-            open(Intent.createChooser(send, title.take(100)))
+        fun shareFile(name: String, mime: String, text: String) {
+            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(60).ifEmpty { "export.txt" }
+            val dir = ExportProvider.exportDir(cacheDir)
+            dir.listFiles()?.forEach { it.delete() }
+            java.io.File(dir, safe).writeText(text, Charsets.UTF_8)
+            val uri = android.net.Uri.Builder()
+                .scheme("content")
+                .authority(ExportProvider.authority(packageName))
+                .appendPath(safe)
+                .build()
+            runOnUiThread {
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType(if (mime == "text/csv") "text/csv" else "text/plain")
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .putExtra(Intent.EXTRA_SUBJECT, safe)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val chooser = Intent.createChooser(send, safe).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                open(chooser)
+            }
         }
 
         @JavascriptInterface

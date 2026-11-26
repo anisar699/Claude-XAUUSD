@@ -7,7 +7,7 @@
 
 import { store } from './store.js';
 import { createAlertState, describeAlert, evaluateAlerts, gateAreas } from './core/alerts.js';
-import { nearestAreas } from './core/confluence.js';
+import { FEEDS_OF_TF, nearestAreas } from './core/confluence.js';
 import { marketStatus } from './core/time.js';
 import { closedOnly } from './core/model.js';
 import { entryReached, planNumbers } from './core/planner.js';
@@ -72,30 +72,51 @@ function reportMarket(m) {
   bridge.marketState(m.open, m.nextChange * 1000);
 }
 
-// Saved trade plans: notify once when live price reaches a plan's entry. A
-// plan is armed only while price is on its waiting side (above a long's
-// entry, below a short's), so saving a plan at its entry does not fire it.
+// Saved trade plans: notify once when live price touches a plan's entry
+// (the ask for a buy, the bid for a sell). A plan is armed only while price is
+// on its waiting side, so saving a plan at its entry does not fire it. An
+// edited plan has a new id, so it starts unarmed and unreached. `notified`
+// keeps a hit from repeating even if storing it failed.
 const planArmed = new Map();
+const notified = new Set();
 
-function checkPlans(t, price) {
+function checkPlans(t, bid, ask) {
   const hits = readHits();
   const out = [];
   for (const plan of readPlans()) {
-    if (hits[plan.id]) continue;
-    if (!entryReached(plan, price)) {
+    if (hits[plan.id] || notified.has(plan.id)) continue;
+    if (!entryReached(plan, bid, ask)) {
       planArmed.set(plan.id, true);
       continue;
     }
-    if (!planArmed.get(plan.id) || !markHit(plan.id, t)) continue;
+    if (!planArmed.get(plan.id)) continue;
+    notified.add(plan.id);
+    markHit(plan.id, t);
     const n = planNumbers(plan);
     const tp = n.targets.length ? ` · TP ${n.targets[0].price.toFixed(2)} (${n.targets[0].rr.toFixed(1)}R)` : '';
+    const long = plan.dir === 'long';
     out.push({
       key: `plan:${plan.id}`,
-      title: `Plan entry reached: ${plan.dir === 'long' ? 'BUY' : 'SELL'} ${plan.entry.toFixed(2)}`,
-      body: `Price ${price.toFixed(2)} · SL ${plan.sl.toFixed(2)}${tp}${plan.lots ? ` · ${plan.lots} lots` : ''}`,
+      title: `Plan entry touched: ${long ? 'BUY' : 'SELL'} ${plan.entry.toFixed(2)}`,
+      body: `${long ? `Ask ${ask.toFixed(2)}` : `Bid ${bid.toFixed(2)}`} · SL ${plan.sl.toFixed(2)}${tp}${plan.lots ? ` · ${plan.lots} lots` : ''} · no order was placed`,
     });
   }
   return out;
+}
+
+// Closed candles for close-confirmed breaks and sweeps, only when they are
+// fit for it: current (the newest is the last full period, or the one
+// before), with no missing data, and from feeds that are working. Otherwise
+// none, and those two checks simply wait (R16-03).
+function eventCandles(a, tf, t, badFeeds) {
+  const sec = tf === 'H1' ? 3600 : 900;
+  const closed = closedOnly(a.series[tf] || [], tf, t).slice(-4);
+  if (!closed.length) return [];
+  const last = closed[closed.length - 1];
+  if (t - (last.t + sec) > sec + 120) return [];
+  if (closed.some((c) => c.gap || c.partial)) return [];
+  if ((FEEDS_OF_TF[tf] || []).some((f) => badFeeds.includes(f))) return [];
+  return closed;
 }
 
 function paused(text, kind = 'paused') {
@@ -115,7 +136,7 @@ function evaluate() {
   if (!m.open) return paused(`Market closed · last ${px(a.lastPrice)} · alerts paused`);
   if (!store.priceIsLive()) return paused('No live price · alerts paused');
   // Plan entries need only the live price.
-  send(t, checkPlans(t, store.price()));
+  send(t, checkPlans(t, store.price(), store.price() + store.spread()));
   const m1 = minuteAt(t);
   if (m1 == null || t - m1 > STALE_CANDLES_SEC) return paused('Candles not updating · alerts paused');
 
@@ -133,7 +154,7 @@ function evaluate() {
   const price = store.price();
   // Closed candles for close-confirmed breaks and sweeps.
   const ctf = store.settings.alerts.candleTf === 'H1' ? 'H1' : 'M15';
-  const candles = closedOnly(a.series[ctf] || [], ctf, t).slice(-2);
+  const candles = eventCandles(a, ctf, t, badFeeds);
   const alerts = evaluateAlerts(state, {
     now: t,
     price,

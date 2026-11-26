@@ -156,7 +156,9 @@ test('a ready hourly history makes its areas alertable; a failed feed holds only
   const a = analyse({ H1: h1, M15: [] }, { now, tfs: ['M15', 'H1', 'H4'] });
   assert.ok(a.ready.includes('H1') && a.ready.includes('H4'));
   assert.ok(!a.ready.includes('M15'), 'M15 has no history of its own yet');
-  const zoneArea = a.conf.find((z) => z.tfs.includes('H1'));
+  // (Areas with the monthly pivots are estimates here: the history starts
+  // inside October, so they are left out of this check.)
+  const zoneArea = a.conf.find((z) => z.tfs.includes('H1') && !z.approx);
   assert.ok(zoneArea, 'an area built from H1 zones');
   assert.deepEqual(zoneArea.feeds.sort(), ['H1', 'M1'].concat(zoneArea.feeds.includes('D1U') ? ['D1U'] : []).sort());
 

@@ -20,9 +20,20 @@ const views = {
 };
 let active = 'overview';
 
+// The level lists are rebuilt on updates; keep keyboard focus on the same
+// level (by its price) across a rebuild.
+function keepFocus(view, render) {
+  const el = document.activeElement;
+  const plan = el && view.contains(el) && el.dataset ? el.dataset.plan : null;
+  render();
+  if (plan == null) return;
+  const again = view.querySelector(`[data-plan="${plan}"]`);
+  if (again) again.focus({ preventScroll: true });
+}
+
 function renderActive() {
-  if (active === 'overview') renderOverview(views.overview);
-  else if (active === 'levels') renderLevels(views.levels);
+  if (active === 'overview') keepFocus(views.overview, () => renderOverview(views.overview));
+  else if (active === 'levels') keepFocus(views.levels, () => renderLevels(views.levels));
   else if (active === 'chart') renderChart();
   else if (active === 'trades') renderTrades();
   else renderSettings();
@@ -121,12 +132,22 @@ for (const ev of ['touchend', 'touchcancel']) {
 }
 
 let ticks = 0;
+let wasLive = null;
 store.on((type) => {
   if (type === 'tick') {
     renderHeader();
     // The monitor's state lives in the Android service: look again every 5 s
     // while Settings is open, even when no data arrives (market closed).
     if (active === 'settings' && ++ticks % 5 === 0) renderSettingsStatus();
+    // The quote can go stale with no new event (a feed that stopped): every
+    // view that shows the live price follows as soon as it does.
+    const live = store.priceIsLive();
+    if (live !== wasLive) {
+      wasLive = live;
+      if (active === 'chart') onChartQuote();
+      else if (active === 'overview' || active === 'levels') refreshLists();
+      pushWidget(store);
+    }
     return;
   }
   renderHeader();
@@ -173,10 +194,19 @@ initSettings(views.settings);
 initTrades(views.trades);
 setNavigator(() => show('trades'));
 // Tap a level (Overview or Levels) to plan a trade from it.
+// Tap, or Enter / Space on a focused level, plans from it.
+const planRow = (row) => planFromLevel(Number(row.dataset.lo), Number(row.dataset.hi), Number(row.dataset.plan));
 for (const v of [views.overview, views.levels]) {
   v.addEventListener('click', (e) => {
     const row = e.target.closest('[data-plan]');
-    if (row) planFromLevel(Number(row.dataset.lo), Number(row.dataset.hi), Number(row.dataset.plan));
+    if (row) planRow(row);
+  });
+  v.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('[data-plan]');
+    if (!row || e.repeat) return;
+    e.preventDefault();
+    planRow(row);
   });
 }
 show('overview');

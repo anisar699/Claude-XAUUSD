@@ -105,7 +105,7 @@ export function renderOverview(el) {
       ${sessionTiles(a, price)}
     </div>
     ${sessionsCard(a)}
-    <p class="note">Tap a level to plan a trade from it. Structure: the last swing high (HH higher, LH lower) and low (HL higher, LL lower) and the latest break of structure (BOS), or a change of character (CHoCH) when it broke the other way. Session times are in your phone's time.</p>
+    <p class="note">Tap a level to plan a trade from it. Structure: the last swing high (HH higher, LH lower, EH equal) and low (HL higher, LL lower, EL equal) and the latest break of structure (BOS), or a change of character (CHoCH) when it broke the other way. Session times are in your phone's time.</p>
     <p class="note">Tags show where a level comes from: a timeframe's swing zone, a pivot (D/W/M), a previous high or low (PDH, PWL…), or a round number.</p>
     <p class="note">Strength bars rank a level against the others shown now: how many swings and timeframes back it, and how recent they are. They are a ranking, not a probability: in testing on past data they did not tell which levels price would turn at, so treat every level as a place to watch, not a trade signal. A round number on its own is shown as a reference price, without bars.</p>`;
 }

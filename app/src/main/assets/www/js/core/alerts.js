@@ -83,8 +83,9 @@ function clearSide(area, price, buffer) {
   return null;
 }
 
-// candles: the latest closed candles of prefs.candleTf, oldest first (the
-// last one is used); candleSec: their length. Without them, close-confirmed
+// candles: the latest closed candles of prefs.candleTf, oldest first: the
+// last one is judged, the ones before it give the side price came from;
+// candleSec: their length. Without them, close-confirmed
 // breaks and sweeps are simply not checked.
 export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs, candles = [], candleSec = 900 }) {
   const p = { ...ALERT_DEFAULTS, ...prefs };
@@ -130,6 +131,7 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs, ca
         brokenSide: null,
         candleT: bar ? bar.t : null,
         candleSide: bar ? clearSide(area, bar.c, buffer) : null,
+        candleArea: { lo: area.lo, hi: area.hi },
       });
       continue;
     }
@@ -164,22 +166,29 @@ export function evaluateAlerts(state, { now, price, areas, tol, atrH1, prefs, ca
     // first seen): close-confirmed break and sweep.
     if (bar && bar.t !== entry.candleT) {
       entry.candleT = bar.t;
+      // The side the earlier closes were on, judged against the area as it is
+      // now: a level that moved across unchanged closes is not a break.
+      let base = null;
+      for (let k = candles.length - 2; k >= 0 && !base; k--) base = clearSide(area, candles[k].c, buffer);
+      const moved = !entry.candleArea || Math.abs(entry.candleArea.lo - area.lo) > 1e-6 || Math.abs(entry.candleArea.hi - area.hi) > 1e-6;
+      if (!base && !moved) base = entry.candleSide;
+      const cs = clearSide(area, bar.c, buffer);
       if (bar.t + candleSec > entry.seenAt) {
-        const cs = clearSide(area, bar.c, buffer);
-        if (p.breakOn === 'close' && cs && entry.candleSide && cs !== entry.candleSide && now - entry.lastBreak >= BREAK_COOLDOWN_SEC) {
+        if (p.breakOn === 'close' && cs && base && cs !== base && now - entry.lastBreak >= BREAK_COOLDOWN_SEC) {
           broke(cs === 'below' ? 'up' : 'down', { close: bar.c, candleSec });
         }
         if (p.sweeps && now - entry.lastSweep >= BREAK_COOLDOWN_SEC) {
-          if (entry.candleSide === 'above' && bar.h >= area.hi + buffer && bar.c <= area.hi) {
+          if (base === 'above' && bar.h >= area.hi + buffer && bar.c <= area.hi) {
             entry.lastSweep = now;
             out.push({ kind: 'sweep', direction: 'up', area, price, wick: bar.h, close: bar.c, candleSec, since });
-          } else if (entry.candleSide === 'below' && bar.l <= area.lo - buffer && bar.c >= area.lo) {
+          } else if (base === 'below' && bar.l <= area.lo - buffer && bar.c >= area.lo) {
             entry.lastSweep = now;
             out.push({ kind: 'sweep', direction: 'down', area, price, wick: bar.l, close: bar.c, candleSec, since });
           }
         }
-        if (cs) entry.candleSide = cs;
       }
+      entry.candleSide = cs || base;
+      entry.candleArea = { lo: area.lo, hi: area.hi };
     }
 
     if (entry.side) {

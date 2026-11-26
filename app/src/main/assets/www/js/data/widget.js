@@ -7,6 +7,7 @@ import { nearestAreas } from '../core/confluence.js';
 
 let lastKey = '';
 let lastAt = 0;
+let lastLive = null;
 
 export function widgetData(store) {
   const a = store.analysis;
@@ -30,11 +31,14 @@ export function widgetData(store) {
 export function pushWidget(store, bridge = typeof window !== 'undefined' ? window.AndroidApp || window.AndroidMonitor : null) {
   if (!bridge || !bridge.widget) return;
   const now = Date.now();
-  if (now - lastAt < 15000) return;
   const d = widgetData(store);
   if (!d) return;
+  // A change between live and not live goes out at once; otherwise at most
+  // every 15 s, and only when something shown changed (or once a minute).
+  if (now - lastAt < 15000 && d.live === lastLive) return;
   const key = JSON.stringify(d);
   if (key === lastKey && now - lastAt < 60000) return;
+  lastLive = d.live;
   lastKey = key;
   lastAt = now;
   bridge.widget(JSON.stringify({ ...d, at: now }));

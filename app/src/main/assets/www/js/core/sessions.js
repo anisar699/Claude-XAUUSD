@@ -86,18 +86,27 @@ function rangeOf(candles, from, to) {
 }
 
 // Every session's latest window with its high, low and opening range.
-// `seriesList` holds candle series finest first (for example M1, M5, M15);
-// each session uses the finest one that reaches back to its start, so a
-// Monday morning still gets Friday's New York session from 5-minute candles.
-// `covered` is false when none does and the numbers are partial. Also the
-// sessions active at `t`.
+// `seriesList` holds candle series finest first (for example M1, M5, M15),
+// each as { candles, step } (or a bare array of minute candles). A session
+// uses the finest series that covers its whole window so far: from its start
+// to the latest full period before `t` (or its end). So a Monday morning
+// still gets Friday's New York session from 5-minute candles, and a minute
+// feed that fell behind does not hide newer 5-minute highs and lows. When no
+// series covers the window, the one reaching furthest is used and `covered`
+// is false: the numbers are partial.
 export function sessionStats(seriesList, t) {
-  const list = (Array.isArray(seriesList[0]) || !seriesList.length ? seriesList : [seriesList]).filter((x) => x && x.length);
+  const list = (Array.isArray(seriesList[0]) || !seriesList.length || seriesList[0].candles ? seriesList : [seriesList])
+    .map((x) => (Array.isArray(x) ? { candles: x, step: 60 } : x))
+    .filter((x) => x && x.candles && x.candles.length);
   const out = SESSIONS.map((s) => {
     const w = latestWindow(s, t);
     if (!w) return { ...s, window: null };
-    const candles = list.find((x) => x[0].t <= w.start) || list[list.length - 1] || [];
     const to = Math.min(w.end, t);
+    const reaches = (x) => x.candles[x.candles.length - 1].t + 2 * x.step >= to;
+    const starts = (x) => x.candles[0].t <= w.start;
+    const full = list.find((x) => starts(x) && reaches(x));
+    const pick = full || list.filter(starts).sort((a, b) => b.candles[b.candles.length - 1].t - a.candles[a.candles.length - 1].t)[0] || list[list.length - 1];
+    const candles = pick ? pick.candles : [];
     const range = rangeOf(candles, w.start, to);
     const opening = t >= w.start + OPENING_RANGE_MIN * 60 ? rangeOf(candles, w.start, w.start + OPENING_RANGE_MIN * 60) : null;
     return {
@@ -106,7 +115,7 @@ export function sessionStats(seriesList, t) {
       next: w.active ? null : nextWindow(s, t),
       high: range ? range.h : null,
       low: range ? range.l : null,
-      covered: !!candles.length && candles[0].t <= w.start,
+      covered: !!full,
       opening: opening ? { high: opening.h, low: opening.l } : null,
     };
   });

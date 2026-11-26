@@ -66,9 +66,10 @@ test('one minute candle: the monitor warms up and sends no alert (P05)', async (
 });
 
 test('with hourly history ready, an H1 area alerts although M15 failed (P12)', async () => {
-  // 700 open-market hours of wavy prices ending at the current hour.
+  // Open-market hours of wavy prices ending at the current hour.
   const hours = [];
-  for (let t = Math.floor(sec() / 3600) * 3600 - 3600; hours.length < 700; t -= 3600) if (marketStatus(t).open) hours.unshift(t);
+  // 1,200 hours: back into September, so October (the previous month) is complete.
+  for (let t = Math.floor(sec() / 3600) * 3600 - 3600; hours.length < 1200; t -= 3600) if (marketStatus(t).open) hours.unshift(t);
   store.raw.H1 = hours.map((t, i) => {
     const mid = 3995 + 3 * Math.sin(i / 3) + 1.5 * Math.sin(i / 7.3);
     return { t, o: mid - 0.4, h: mid + 1, l: mid - 1, c: mid + 0.4, v: 0 };
@@ -102,9 +103,10 @@ test('a saved plan notifies once when price reaches its entry', async () => {
   await quoteAt(3994); // above the entry: armed
   assert.equal(sent.alert.length, 0);
   await quoteAt(3989.5);
-  const hit = sent.alert.find((x) => x.title === 'Plan entry reached: BUY 3990.00');
+  // A buy is checked on the ask (bid + 0.30 here): 3989.80 touches 3990.
+  const hit = sent.alert.find((x) => x.title === 'Plan entry touched: BUY 3990.00');
   assert.ok(hit, 'entry alert sent');
-  assert.match(hit.body, /SL 3985.00 · TP 4000.00 \(2.0R\) · 0.1 lots/);
+  assert.match(hit.body, /^Ask 3989.80 · SL 3985.00 · TP 4000.00 \(2.0R\) · 0.1 lots · no order was placed$/);
   assert.ok(readHits().p1);
   const n = sent.alert.length;
   await quoteAt(3995);

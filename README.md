@@ -29,17 +29,25 @@ financial advice.
   other way round. Targets are the near edges of the next areas, each with
   its reward-to-risk. From your balance and risk per trade it works out the
   lot size (rounded down, 100 oz per lot unless you change it). A saved plan
-  sends a notification when price reaches its entry (with background
-  monitoring on).
+  sends a notification when the price touches its entry: the ask for a buy,
+  the bid for a sell (with background monitoring on). It is a price alert;
+  no order is placed. Editing a plan saves it as a new one. Up to 50 plans;
+  a full list refuses new ones rather than dropping old ones.
 - **Trade journal**: log the trades you take (from a plan or by hand): entry,
   stop, target, exit, lots, setup, timeframe, notes; the session is filled in
-  from the time. Statistics: win rate, average R (expectancy), profit and
-  loss, profit factor, by setup, session and direction. Share it as CSV.
+  from the time. Each trade keeps the contract size it was logged with.
+  Statistics: win rate, average R (expectancy), profit and loss, profit
+  factor, by setup, session and direction. Share it as a CSV file (the
+  whole journal; text that a spreadsheet could read as a formula is
+  prefixed with an apostrophe). Up to 2,000 trades, all reachable with
+  "Show older"; a full journal refuses new trades rather than dropping old
+  ones.
 - **Sessions**: Asia (Tokyo 09:00-18:00), London and New York (08:00-17:00
   local, with their own daylight saving): current session, each one's high
   and low and its 30-minute opening range; also as chart lines.
-- **Market structure**: per timeframe, the last swing high (HH / LH) and low
-  (HL / LL) and the latest break of structure (BOS), or change of character
+- **Market structure**: per timeframe, the last swing high (HH / LH / EH for
+  equal within 0.05 ATR) and low (HL / LL / EL) and the latest break of
+  structure (BOS), or change of character
   (CHoCH) when it broke against the one before; in the trend table, the
   Levels screen and as chart lines.
 - **Your broker**: a price offset (type your broker's bid and tap "Match my

@@ -4,7 +4,7 @@
 import { store } from '../store.js';
 import { latestWindow, SESSIONS } from '../core/sessions.js';
 import { journalCsv, journalStats, planFromArea, planNumbers, positionSize, tradeResult } from '../core/planner.js';
-import { deletePlan, deleteTrade, newId, readHits, readPlans, readTrades, savePlan, saveTrade } from '../data/trades.js';
+import { deletePlan, deleteTrade, MAX_PLANS, MAX_TRADES, newId, readHits, readPlans, readTrades, savePlan, saveTrade, stampContracts, tradeProblem } from '../data/trades.js';
 import { dateTime, esc, px } from './format.js';
 
 const SETUPS = ['Support bounce', 'Resistance rejection', 'Breakout', 'Break & retest', 'Sweep / stop hunt', 'Trend continuation', 'Other'];
@@ -16,6 +16,14 @@ let draft = null; // the plan being edited: { id?, dir, entry, sl, tps: [..3], l
 let form = null; // the trade being edited in the journal, or null
 let message = '';
 let jMessage = '';
+let shownTrades = 100; // journal rows listed; "Show older" adds more
+let hitsKey = ''; // the saved-plan statuses last drawn
+
+const FAIL = {
+  storage: "The phone did not let the app save. Nothing was lost on screen: free some storage or try again.",
+  full: null, // set per list below
+  invalid: 'Check the numbers first.',
+};
 let go = () => {}; // switches to this tab (set by main.js)
 
 export function setNavigator(fn) {
@@ -112,16 +120,21 @@ function plannerCard() {
 
 function plansCard() {
   const plans = readPlans();
-  if (!plans.length) return '';
   const hits = readHits();
+  hitsKey = JSON.stringify(hits);
+  if (!plans.length) return '<div id="plans-card"></div>';
+  const offNow = store.settings.brokerOffset;
   const rows = plans
     .map((p) => {
       const n = planNumbers(p);
       const tp = n.targets.length ? ` · TP ${px(n.targets[0].price)} (${n.targets[0].rr.toFixed(1)}R)` : '';
-      const status = hits[p.id] ? `<span class="pill hit">Entry reached ${dateTime(hits[p.id])}</span>` : '<span class="pill">Waiting for entry</span>';
+      const status = hits[p.id] ? `<span class="pill hit">Entry touched ${dateTime(hits[p.id])}</span>` : '<span class="pill">Waiting for entry</span>';
+      const off = Number.isFinite(p.offset) ? p.offset : 0;
+      const basis = `${p.dir === 'long' ? 'ask' : 'bid'}${off ? ` · offset ${off >= 0 ? '+' : '−'}${Math.abs(off).toFixed(2)}` : ''}`;
+      const moved = Math.abs(off - offNow) > 0.004 ? `<div class="lv-sub warn">Broker offset changed since this plan was saved (${off.toFixed(2)} → ${offNow.toFixed(2)}); its prices were not moved. Edit it if needed.</div>` : '';
       return `<div class="row plan">
         <div class="lv-main"><span class="lv-price">${p.dir === 'long' ? 'BUY' : 'SELL'} ${px(p.entry)}</span>
-          <div class="lv-sub">SL ${px(p.sl)}${tp}${p.lots ? ` · ${p.lots} lots` : ''}</div>${status}</div>
+          <div class="lv-sub">SL ${px(p.sl)}${tp}${p.lots ? ` · ${p.lots} lots` : ''} · watched on the ${basis}</div>${status}${moved}</div>
         <div class="lv-side btns-col">
           <button class="btn sm" data-act="plan-edit" data-id="${p.id}">Edit</button>
           <button class="btn sm" data-act="plan-trade" data-id="${p.id}">Log trade</button>
@@ -130,9 +143,9 @@ function plansCard() {
       </div>`;
     })
     .join('');
-  return `<div class="card"><div class="card-h"><h2>Saved plans</h2><span>alert when price reaches the entry</span></div>
+  return `<div class="card" id="plans-card"><div class="card-h"><h2>Saved plans</h2><span>${plans.length} of ${MAX_PLANS}</span></div>
     <div class="rows">${rows}</div>
-    <p class="note">Entry alerts are sent by background monitoring (Settings › Alerts), while it runs and the price is live.</p></div>`;
+    <p class="note">You get a notification when the price touches a plan's entry: the ask for a buy, the bid for a sell. It is a price alert only; no order is placed. Sent by background monitoring (Settings › Alerts) while it runs and the price is live.</p></div>`;
 }
 
 // ---- journal ------------------------------------------------------------------
@@ -176,7 +189,7 @@ function journalCard() {
   const trades = readTrades();
   const contract = store.settings.account.contract;
   const rows = trades
-    .slice(0, 100)
+    .slice(0, shownTrades)
     .map((t) => {
       const open = !Number.isFinite(t.exit);
       const r = open ? null : tradeResult(t, contract);
@@ -192,6 +205,8 @@ function journalCard() {
     <div class="card-h"><h2>Trade journal</h2><span>${trades.length} trade${trades.length === 1 ? '' : 's'}</span></div>
     ${form ? journalForm() : '<div class="btns" style="padding:4px 0 8px"><button class="btn" data-act="j-new">Add trade</button>' + (trades.length ? '<button class="btn" data-act="j-csv">Share as CSV</button>' : '') + '</div>'}
     <div class="rows">${rows || '<div class="row-none">No trades yet. Log the trades you take to see what works for you.</div>'}</div>
+    ${trades.length > shownTrades ? `<div class="btns" style="padding-top:8px"><span class="lv-sub">Showing the newest ${shownTrades} of ${trades.length}</span><button class="btn" data-act="j-more">Show ${Math.min(100, trades.length - shownTrades)} older</button></div>` : ''}
+    ${trades.length >= MAX_TRADES * 0.9 ? `<p class="note warn">The journal holds up to ${MAX_TRADES} trades and has ${trades.length}. Share it as CSV and delete old trades to make room; nothing is removed by itself.</p>` : ''}
   </div>`;
 }
 
@@ -234,6 +249,10 @@ export function refreshTrades() {
   if (!root || root.hidden) return;
   const el = root.querySelector('#plan-results');
   if (el && draft) el.innerHTML = plannerResults();
+  // A plan's entry may have been touched (the monitor writes that): redraw
+  // the saved-plans card only, which has no fields to lose focus in.
+  const card = root.querySelector('#plans-card');
+  if (card && JSON.stringify(readHits()) !== hitsKey) card.outerHTML = plansCard();
 }
 
 function readForm() {
@@ -256,7 +275,8 @@ function readForm() {
 function shareCsv() {
   const csv = journalCsv(readTrades(), store.settings.account.contract);
   const n = native();
-  if (n && n.shareText) return n.shareText('XAUUSD trade journal', csv);
+  // As a file: the whole journal, however long.
+  if (n && n.shareFile) return n.shareFile('xauusd-journal.csv', 'text/csv', csv);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
   a.download = 'xauusd-journal.csv';
@@ -266,6 +286,12 @@ function shareCsv() {
 
 export function initTrades(el) {
   root = el;
+  // Older trades did not record their contract size; fix it to today's, once.
+  stampContracts(store.settings.account.contract);
+  // The monitor page records entry touches in shared storage.
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'xau.plans.hits.v1') refreshTrades();
+  });
   el.addEventListener('input', (e) => {
     const t = e.target;
     if (t.dataset.f && draft) {
@@ -310,9 +336,16 @@ export function initTrades(el) {
       else {
         const acc = store.settings.account;
         const size = positionSize({ balance: acc.balance, riskPct: acc.riskPct, entry: plan.entry, sl: plan.sl, contract: acc.contract });
-        savePlan({ id: draft.id || newId(), created: Math.floor(Date.now() / 1000), dir: plan.dir, entry: plan.entry, sl: plan.sl, tps: plan.tps, lots: size.lots, level: plan.level });
-        draft = null;
-        message = 'Plan saved. With background monitoring on, you get a notification when price reaches the entry.';
+        // An edit is saved as a new plan that replaces the old one, so it
+        // starts fresh: not reached, not armed.
+        const res = savePlan(
+          { id: newId(), created: Math.floor(Date.now() / 1000), dir: plan.dir, entry: plan.entry, sl: plan.sl, tps: plan.tps, lots: size.lots, level: plan.level, offset: store.settings.brokerOffset, contract: acc.contract },
+          draft.id || null,
+        );
+        if (res.ok) {
+          message = `Plan ${draft.id ? 'updated' : 'saved'}. With background monitoring on, you get a notification when the price touches the entry.`;
+          draft = null;
+        } else message = res.reason === 'full' ? `You have ${MAX_PLANS} saved plans, the most the app keeps. Delete one first.` : FAIL[res.reason];
       }
     } else if ((act === 'plan-log' && draft) || act === 'plan-trade') {
       const p = act === 'plan-log' ? draftPlan() : readPlans().find((x) => x.id === id);
@@ -320,7 +353,7 @@ export function initTrades(el) {
         const acc = store.settings.account;
         const lots = p.lots || positionSize({ balance: acc.balance, riskPct: acc.riskPct, entry: p.entry, sl: p.sl, contract: acc.contract }).lots;
         const t = Math.floor(Date.now() / 1000);
-        form = { id: newId(), t, dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tps[0], exit: NaN, lots, setup: p.dir === 'long' ? 'Support bounce' : 'Resistance rejection', tf: 'H1', notes: '' };
+        form = { id: newId(), t, dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tps[0], exit: NaN, lots, contract: p.contract || acc.contract, setup: p.dir === 'long' ? 'Support bounce' : 'Resistance rejection', tf: 'H1', notes: '' };
       }
     } else if (act === 'plan-edit') {
       const p = readPlans().find((x) => x.id === id);
@@ -335,19 +368,26 @@ export function initTrades(el) {
       if (t) form = { ...t, saved: true };
     } else if (act === 'j-cancel') form = null;
     else if (act === 'j-del' && form) {
-      deleteTrade(form.id);
-      form = null;
+      if (deleteTrade(form.id)) form = null;
+      else jMessage = FAIL.storage;
     } else if (act === 'j-save' && form) {
       const f = readForm();
-      if (!Number.isFinite(f.entry)) {
-        jMessage = 'Enter at least the entry price.';
+      const { saved, ...trade } = { ...f, contract: f.contract > 0 ? f.contract : store.settings.account.contract };
+      // NaN (an empty field) is kept as "not given".
+      const problem = tradeProblem(trade);
+      if (problem) {
+        jMessage = problem;
         form = f;
       } else {
-        const { saved, ...trade } = f;
-        saveTrade({ ...trade, session: sessionAt(trade.t) });
-        form = null;
+        const res = saveTrade({ ...trade, session: sessionAt(trade.t) });
+        if (res.ok) form = null;
+        else {
+          jMessage = res.reason === 'full' ? `The journal is full (${MAX_TRADES} trades). Share it as CSV and delete old trades first.` : FAIL[res.reason];
+          form = f;
+        }
       }
-    } else if (act === 'j-csv') shareCsv();
+    } else if (act === 'j-more') shownTrades += 100;
+    else if (act === 'j-csv') shareCsv();
     renderTrades();
   });
 }

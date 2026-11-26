@@ -1,5 +1,6 @@
 package com.xauusd.levels
 
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
@@ -18,8 +19,10 @@ import java.util.Locale
  *
  * It has no data source of its own. Whichever page is running (the app
  * screen, or background monitoring) hands it a snapshot through [push], at
- * most every 15 seconds; the widget shows the last one with its time. With
- * neither running it keeps the last values, marked by that time.
+ * most every 15 seconds; the widget shows the last one with its time. "Live"
+ * is shown only while the snapshot is under [LIVE_MS] old: each push also
+ * sets a redraw for just after that, so when updates stop the widget turns
+ * to "Last <time>" by itself instead of looking live.
  */
 class LevelsWidget : AppWidgetProvider() {
 
@@ -30,6 +33,7 @@ class LevelsWidget : AppWidgetProvider() {
     companion object {
         private const val PREFS = "widget"
         private const val KEY = "snapshot"
+        private const val LIVE_MS = 120_000L
 
         /** Store a snapshot (JSON from js/data/widget.js) and redraw every widget. */
         fun push(context: Context, json: String) {
@@ -42,7 +46,19 @@ class LevelsWidget : AppWidgetProvider() {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY, json).apply()
             val manager = AppWidgetManager.getInstance(context)
             val ids = manager.getAppWidgetIds(ComponentName(context, LevelsWidget::class.java))
-            if (ids.isNotEmpty()) render(context, manager, ids)
+            if (ids.isEmpty()) return
+            render(context, manager, ids)
+            // Redraw once the snapshot has aged past "live" (replaced by the
+            // next push while updates keep coming). Inexact is enough.
+            val redraw = PendingIntent.getBroadcast(
+                context, 4,
+                Intent(context, LevelsWidget::class.java)
+                    .setAction(AppWidgetManager.ACTION_APPWIDGET_UPDATE)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_IDS, ids),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
+                .set(AlarmManager.RTC, System.currentTimeMillis() + LIVE_MS + 15_000, redraw)
         }
 
         private fun render(context: Context, manager: AppWidgetManager, ids: IntArray) {
@@ -68,8 +84,10 @@ class LevelsWidget : AppWidgetProvider() {
                 views.setTextViewText(R.id.w_res, d.optString("r", ""))
                 views.setTextViewText(R.id.w_sup, d.optString("s", ""))
                 val at = d.optLong("at", 0L)
-                val time = if (at > 0) SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(at)) else ""
-                val state = if (d.optBoolean("live")) "Live" else "Last"
+                val age = System.currentTimeMillis() - at
+                val pattern = if (age < 20 * 3600_000L) "HH:mm" else "d MMM HH:mm"
+                val time = if (at > 0) SimpleDateFormat(pattern, Locale.getDefault()).format(Date(at)) else ""
+                val state = if (d.optBoolean("live") && age in 0 until LIVE_MS) "Live" else "Last"
                 val session = d.optString("session", "")
                 views.setTextViewText(R.id.w_time, listOf("$state $time", session).filter { it.isNotBlank() }.joinToString(" · "))
             }

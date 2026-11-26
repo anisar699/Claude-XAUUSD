@@ -46,6 +46,12 @@
             android:name=".MonitorAlarmReceiver"
             android:exported="false" />
 
+        <provider
+            android:name=".ExportProvider"
+            android:authorities="${applicationId}.exports"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <receiver
             android:name=".LevelsWidget"
             android:exported="false"
