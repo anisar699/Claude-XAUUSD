@@ -36,6 +36,17 @@ decision.
 | R16-05 Plan price basis and quote side | A buy entry is watched on the ask and a sell on the bid. Each plan stores the broker offset it was saved with. The card shows which side is watched and warns if the offset has changed since. The notification says "Entry touched … no order was placed". | test |
 | R16-06 Silent removal at the limits | At 50 plans or 2,000 trades, a new save is refused with a message; editing still works. From 90% full the journal warns. Nothing is deleted on its own. | test |
 
+## Device checks (Android 11 emulator)
+
+1.6.1 was installed over 1.6.0, keeping its data, and was live within seconds.
+
+- **V16-07 (CSV share):**
+  - "Share as CSV" opens the Android share sheet with the journal as a file (`cache/exports/xauusd-journal.csv`).
+  - Reading the share URI through the provider returned the whole file, and its name and size.
+  - A path that tries to leave the export folder is refused.
+  - The emulator has no app that accepts CSV files, so the sheet said "No apps can perform this action". On a phone with Drive, Gmail or Sheets they will be listed.
+- **R16-02 (widget):** with the app in the background and no new updates, the widget changed from "Live 10:02 · London" to "Last 10:04 · London" about 2½ minutes later.
+
 ## Not changed
 
 - **Signing key (R16-01):** kept, as the owner decided.
