@@ -199,7 +199,8 @@ let brokerMsg = '';
 // ---- level record -------------------------------------------------------------
 
 let lrMsg = '';
-let lrClearArmed = 0; // "Start over" needs a second tap within 5 s
+let lrClearArmed = 0; // "Start over" needs a second tap within 10 s; its label stays
+// about as long ("Yes, delete"), so the button does not move under the finger
 let lastLevelRec = '';
 
 function levelRecBlock() {
@@ -226,7 +227,7 @@ function levelRecCard() {
     <div id="lr-state">${lastLevelRec}</div>
     <div class="btns" style="padding-top:12px">
       <button class="btn" data-act="lr-csv">Download report (CSV)</button>
-      <button class="btn" data-act="lr-clear">${armed ? 'Tap again to delete the record' : 'Start over'}</button>
+      <button class="btn" data-act="lr-clear">${armed ? 'Yes, delete' : 'Start over'}</button>
     </div>
     <div class="msg" id="lr-msg" role="status">${esc(lrMsg)}</div>
     <p class="note">Every level the app shows is recorded with what price did there: tested, held, broke, swept, retested. It works from closed 15-minute candles, so it carries on while the app is closed: when the app or background monitoring runs again, it fills in up to 7 days. The report is two files: a summary by timeframe, source, strength, side, session and test number, and every event, one row each.</p>
@@ -444,14 +445,14 @@ export function initSettings(el) {
           lrClearArmed = 0;
           lrMsg = clearLevelRecord() ? 'Record deleted. A new one starts now.' : 'Could not delete the record.';
         } else {
-          lrClearArmed = Date.now() + 5000;
-          lrMsg = 'This deletes every recorded level. Download the report first if you want to keep it.';
+          lrClearArmed = Date.now() + 10000;
+          lrMsg = 'Tap "Yes, delete" to delete every recorded level. Download the report first if you want to keep it.';
           setTimeout(() => {
             if (lrClearArmed && Date.now() >= lrClearArmed) {
               lrClearArmed = 0;
               renderSettings();
             }
-          }, 5100);
+          }, 10100);
         }
         renderSettings();
       } else if (a === 'alerts-clear') {
