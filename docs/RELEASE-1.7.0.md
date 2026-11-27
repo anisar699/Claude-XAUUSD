@@ -79,3 +79,21 @@ from install, shows whether that changes.
 - **Browser (mocked feeds):** a record started a day earlier caught up, the
   Settings card showed it, the report downloaded as two files, and "Start
   over" deleted it only on the second tap. No page errors.
+- **Emulator (Android 11, live market, 27 Nov 2026):** 1.7.0 installed over
+  1.6.1 and kept its data.
+  - The record started at 11:15. With the app closed and only background
+    monitoring running, it was up to 11:45 (12 levels) when the app was
+    opened again.
+  - M15 and M30 were then switched off. At the next step the level built
+    only on M15 was reported as "not reached (removed)": the app created the
+    file itself, header first. The 15-minute feed kept loading with M15 off.
+  - "Download report" with nothing recorded shows a message. With rows in
+    the file, it opened the share sheet with both files. Read back through
+    the provider, the events file matched the record file byte for byte and
+    the summary had its groups. The emulator has no app that takes CSV
+    files, so the sheet itself listed none.
+  - "Start over" failed at first on the phone: the confirm label ("Tap again
+    to delete the record") wrapped the button onto a new line, so a second
+    tap in the same place missed it. Now the label is "Yes, delete" and the
+    window is 10 seconds. After the fix, two taps 2 s apart deleted the file
+    and started a new record.
