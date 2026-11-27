@@ -16,8 +16,8 @@ financial advice.
 - **Chart**: candles with the levels drawn on them.
 - **Trades**: plan a trade from a level and save it with an alert at its
   entry; a trade journal with your own statistics.
-- **Settings**: alerts, your broker (price offset, day boundary), timeframes,
-  refresh rate, data source, data status.
+- **Settings**: alerts, your broker (price offset, day boundary), the level
+  record and its report, timeframes, refresh rate, data source, data status.
 - **Home-screen widget**: price, change and the nearest resistance and
   support, updated while the app or background monitoring runs.
 
@@ -66,6 +66,64 @@ direction as often as the same events at matched random bands (hourly
 sweeps 44% vs 44%, retests 59% vs 61%; 15-minute sweeps 34% vs 33%, retests
 41% vs 40%). They describe what price is doing at a level; they are not a
 signal on their own, and the app says so.
+
+## Level record (1.7)
+
+The app keeps a record of every level it shows and what price did there, from
+the day it is installed, and Settings > Level record > Download report gives
+it as two CSV files:
+
+- **xauusd-level-summary.csv**: for all levels and by timeframe, source
+  (swing zone, pivot, previous high/low, round number), strength, side,
+  session and test number: how many levels were recorded and reached, how
+  many tests held, broke or were swept, the average move, and after breaks
+  how many were reclaimed, retested and held, retested and failed, or not
+  retested. Each line also has the same numbers for random levels and the
+  difference with a rough 95% margin. Definitions are at the bottom.
+- **xauusd-level-events.csv**: every event, one row each, with the level as
+  it looked at the time (price, area, strength, timeframes, sources), the
+  session, the result, how far price moved each way (in hourly ATR) and how
+  long it took.
+
+How it works (`js/core/levelrec.js`, `js/data/levelrec.js`):
+
+- Every closed 15-minute candle is one step. At its close the areas are
+  worked out again from the candles closed by then, so a step run late, after
+  the app was closed, sees what the app would have shown at the time. When
+  the app or background monitoring runs again it fills in up to 7 days;
+  older stretches are listed as not recorded.
+- A level is recorded the first time an area is shown with price outside it
+  and within 6 hourly ATR, from timeframes that were ready. It is followed
+  while the app keeps showing it; one dropped before price reached it is
+  reported as "not reached (removed)".
+- Scoring uses 15-minute candles and the hourly ATR (A) when the level was
+  recorded. **Test**: a candle trades into the area. **Held**: price then
+  moves 1 A away before a candle closes through it by the alerts' break
+  buffer (0.1 A, at least $0.30); on the test candle only its close counts.
+  **Broke**: that close comes first. **Swept**: a wick went through and the
+  candle closed back. After a break: **reclaimed** (closed back before going
+  0.5 A beyond), **retest held** (went 0.5 A beyond, came back, then moved
+  1 A away the break's way), **retest failed** (closed back through after
+  coming back), **no retest** (not back within 48 trading hours).
+- **Random twins.** Each level gets two random bands on the same side, of the
+  same width, at the same distance from price (0.5 A bands), shown exactly
+  while the level is and scored by the same rules. Price reacts at random
+  lines too: a kind of level is useful only where it beats its twins by more
+  than the margin.
+- Rows go to a file in the app's private storage (about 4 MB a year, written
+  by both the app screen and the monitor); the levels being followed are in
+  localStorage. Android does not back the file up (backup is off for this
+  app), so the download is the copy to keep. "Start over" deletes the record
+  after a second tap.
+
+Run over the 60 days of Dukascopy history to 13 Nov 2026 as if the app had
+been open throughout (`tools/research/levelrec.mjs`), the app's levels held
+about as often as their random twins: 29.8% of 698 tests against 30.2% of
+1,303 (difference −0.4 points, margin ±4.2). After a break, retests held
+16.7% against 15.9%. No timeframe, source or strength was clearly better
+than its twins in that stretch (for example H4 +4.4 ± 10.7 points,
+strength 5 +4.8 ± 10.7). The phone's own record, kept from install, shows
+whether that changes.
 
 ## Alerts
 
@@ -270,6 +328,7 @@ node tools/research/sources.mjs . data     # each source alone, hourly chart
 node tools/research/sources15.mjs . data   # each source alone, 15-minute chart
 node tools/research/features2.mjs . data   # level properties vs outcome
 node tools/research/events.mjs . data      # sweeps and retests vs random bands
+node tools/research/levelrec.mjs . data 200 # the level record over the last 200 days
 ```
 
 ## Data sources
