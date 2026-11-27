@@ -116,14 +116,16 @@ How it works (`js/core/levelrec.js`, `js/data/levelrec.js`):
   app), so the download is the copy to keep. "Start over" deletes the record
   after a second tap.
 
-Run over the 60 days of Dukascopy history to 13 Nov 2026 as if the app had
-been open throughout (`tools/research/levelrec.mjs`), the app's levels held
-about as often as their random twins: 29.8% of 698 tests against 30.2% of
-1,303 (difference −0.4 points, margin ±4.2). After a break, retests held
-16.7% against 15.9%. No timeframe, source or strength was clearly better
-than its twins in that stretch (for example H4 +4.4 ± 10.7 points,
-strength 5 +4.8 ± 10.7). The phone's own record, kept from install, shows
-whether that changes.
+Run over the 200 days of Dukascopy history to 13 Nov 2026 as if the app had
+been open throughout (`tools/research/levelrec.mjs . data 200`: 13,196
+steps, 2,058 levels, about 14 KB of rows a trading day), the app's levels
+held about as often as their random twins: 29.6% of 2,222 tests against
+29.7% (difference −0.1 points, margin ±2.3). After a break, retests held
+17.1% against 18.0%. Higher timeframes and stronger levels leaned slightly
+better, but none by more than its margin: D1 +5.5 ± 7.4 points, H4
++1.9 ± 5.6, H1 +1.6 ± 3.6, strength 5 +4.2 ± 6.1; strength 1 −3.0 ± 5.0 and
+areas made only of a round number −3.3 ± 10.6. The phone's own record, kept
+from install, shows whether that changes.
 
 ## Alerts
 

@@ -230,7 +230,7 @@ function levelRecCard() {
     </div>
     <div class="msg" id="lr-msg" role="status">${esc(lrMsg)}</div>
     <p class="note">Every level the app shows is recorded with what price did there: tested, held, broke, swept, retested. It works from closed 15-minute candles, so it carries on while the app is closed: when the app or background monitoring runs again, it fills in up to 7 days. The report is two files: a summary by timeframe, source, strength, side, session and test number, and every event, one row each.</p>
-    <p class="note">Each level is compared with two random levels at the same distance from price, scored by the same rules. A kind of level is useful only where it holds more often than its random levels by more than the margin in the summary. On 60 days of past data the app's levels held about as often as the random ones.</p>
+    <p class="note">Each level is compared with two random levels at the same distance from price, scored by the same rules. A kind of level is useful only where it holds more often than its random levels by more than the margin in the summary. On 200 days of past data the app's levels held about as often as the random ones (30% of tests each).</p>
   </div>`;
 }
 
