@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.NotificationManager
+import android.content.ClipData
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -113,6 +114,19 @@ class MainActivity : Activity() {
         }
     }
 
+    // cache/exports, emptied: only the files of the current share are offered.
+    private fun freshExportDir(): java.io.File {
+        val dir = ExportProvider.exportDir(cacheDir)
+        dir.listFiles()?.forEach { it.delete() }
+        return dir
+    }
+
+    private fun exportUri(name: String): android.net.Uri = android.net.Uri.Builder()
+        .scheme("content")
+        .authority(ExportProvider.authority(packageName))
+        .appendPath(name)
+        .build()
+
     /** Methods the page calls as window.AndroidApp. They run on a WebView thread. */
     private inner class Bridge {
         @JavascriptInterface
@@ -177,14 +191,9 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun shareFile(name: String, mime: String, text: String) {
             val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(60).ifEmpty { "export.txt" }
-            val dir = ExportProvider.exportDir(cacheDir)
-            dir.listFiles()?.forEach { it.delete() }
+            val dir = freshExportDir()
             java.io.File(dir, safe).writeText(text, Charsets.UTF_8)
-            val uri = android.net.Uri.Builder()
-                .scheme("content")
-                .authority(ExportProvider.authority(packageName))
-                .appendPath(safe)
-                .build()
+            val uri = exportUri(safe)
             runOnUiThread {
                 val send = Intent(Intent.ACTION_SEND)
                     .setType(if (mime == "text/csv") "text/csv" else "text/plain")
@@ -194,6 +203,49 @@ class MainActivity : Activity() {
                 val chooser = Intent.createChooser(send, safe).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 open(chooser)
             }
+        }
+
+        // ---- the level record (LevelLog, js/data/levelrec.js) ----
+
+        @JavascriptInterface
+        fun levelLogAppend(header: String, text: String): Boolean = LevelLog.append(applicationContext, header, text)
+
+        @JavascriptInterface
+        fun levelLogRead(): String = LevelLog.read(applicationContext)
+
+        @JavascriptInterface
+        fun levelLogClear(): Boolean = LevelLog.clear(applicationContext)
+
+        /**
+         * Shares the level report as two files: the summary the page made
+         * and the whole record file, copied here without passing through the
+         * page. [header] is written alone if nothing is recorded yet.
+         */
+        @JavascriptInterface
+        fun shareLevelReport(summary: String, header: String): Boolean {
+            val dir = freshExportDir()
+            val sum = java.io.File(dir, "xauusd-level-summary.csv")
+            val events = java.io.File(dir, "xauusd-level-events.csv")
+            try {
+                sum.writeText(summary, Charsets.UTF_8)
+            } catch (e: Exception) {
+                return false
+            }
+            if (!LevelLog.copyTo(applicationContext, header, events)) return false
+            val uris = arrayListOf(exportUri(sum.name), exportUri(events.name))
+            runOnUiThread {
+                val clip = ClipData.newRawUri(sum.name, uris[0]).apply { addItem(ClipData.Item(uris[1])) }
+                val send = Intent(Intent.ACTION_SEND_MULTIPLE)
+                    .setType("text/csv")
+                    .putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                    .putExtra(Intent.EXTRA_SUBJECT, "XAUUSD level record")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                send.clipData = clip
+                val chooser = Intent.createChooser(send, "XAUUSD level record").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                chooser.clipData = clip
+                open(chooser)
+            }
+            return true
         }
 
         @JavascriptInterface

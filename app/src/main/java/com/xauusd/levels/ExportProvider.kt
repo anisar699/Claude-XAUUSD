@@ -11,7 +11,7 @@ import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * Hands an exported file (the trade journal as CSV) to the app the user
+ * Hands an exported file (the trade journal or the level report, as CSV) to the app the user
  * shares it with. Files live in cache/exports; access is granted per share
  * with a temporary read permission, so the provider itself is not exported.
  */

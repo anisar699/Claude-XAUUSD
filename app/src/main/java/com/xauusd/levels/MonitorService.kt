@@ -275,6 +275,10 @@ class MonitorService : Service() {
         @JavascriptInterface
         fun widget(json: String) = LevelsWidget.push(applicationContext, json)
 
+        /** Rows for the level record (see LevelLog). */
+        @JavascriptInterface
+        fun levelLogAppend(header: String, text: String): Boolean = LevelLog.append(applicationContext, header, text)
+
         /** kind: running, warmup or paused. Proves the page's checks are running. */
         @JavascriptInterface
         fun heartbeat(kind: String) {

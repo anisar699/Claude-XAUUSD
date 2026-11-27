@@ -5,6 +5,7 @@ import { ANALYSIS_TFS } from '../core/time.js';
 import { PROVIDERS } from '../data/providers.js';
 import { alertDistances } from '../core/alerts.js';
 import { clearAlerts, readAlerts } from '../data/alertlog.js';
+import { clearLevelRecord, levelRecProblem, levelReport, readLevelState } from '../data/levelrec.js';
 import { clock, dateTime, esc, px } from './format.js';
 
 const TF_HINT = {
@@ -195,6 +196,69 @@ function brokerCard() {
 
 let brokerMsg = '';
 
+// ---- level record -------------------------------------------------------------
+
+let lrMsg = '';
+let lrClearArmed = 0; // "Start over" needs a second tap within 5 s
+let lastLevelRec = '';
+
+function levelRecBlock() {
+  const rec = readLevelState();
+  if (!rec) return '<div class="kv"><span>Level record</span><span>starts when market data has loaded</span></div>';
+  const c = rec.count || {};
+  const gaps = rec.gaps || [];
+  const hours = Math.round(gaps.reduce((a, g) => a + (g[1] - g[0]) / 3600, 0));
+  let html = `<div class="kv"><span>Recording since</span><span>${dateTime(rec.since)}</span></div>`;
+  html += `<div class="kv"><span>Recorded up to</span><span>${dateTime(rec.at)}</span></div>`;
+  html += `<div class="kv"><span>Levels recorded</span><span>${c.levels || 0} (${rec.open.filter((l) => l.kind === 'real').length} followed now)</span></div>`;
+  html += `<div class="kv"><span>Tests · breaks</span><span>${c.tests || 0} · ${c.breaks || 0}</span></div>`;
+  if (gaps.length) html += `<div class="kv"><span>Not recorded</span><span>${gaps.length} stretch${gaps.length > 1 ? 'es' : ''}, ${hours} h in all</span></div>`;
+  const problem = levelRecProblem();
+  if (problem) html += `<p class="note warn" style="padding-top:8px">${esc(problem)}</p>`;
+  return html;
+}
+
+function levelRecCard() {
+  lastLevelRec = levelRecBlock();
+  const armed = Date.now() < lrClearArmed;
+  return `<div class="card">
+    <div class="card-h"><h2>Level record</h2><span>how price reacted at each level</span></div>
+    <div id="lr-state">${lastLevelRec}</div>
+    <div class="btns" style="padding-top:12px">
+      <button class="btn" data-act="lr-csv">Download report (CSV)</button>
+      <button class="btn" data-act="lr-clear">${armed ? 'Tap again to delete the record' : 'Start over'}</button>
+    </div>
+    <div class="msg" id="lr-msg" role="status">${esc(lrMsg)}</div>
+    <p class="note">Every level the app shows is recorded with what price did there: tested, held, broke, swept, retested. It works from closed 15-minute candles, so it carries on while the app is closed: when the app or background monitoring runs again, it fills in up to 7 days. The report is two files: a summary by timeframe, source, strength, side, session and test number, and every event, one row each.</p>
+    <p class="note">Each level is compared with two random levels at the same distance from price, scored by the same rules. A kind of level is useful only where it holds more often than its random levels by more than the margin in the summary. On 60 days of past data the app's levels held about as often as the random ones.</p>
+  </div>`;
+}
+
+function exportLevelReport() {
+  const r = levelReport();
+  if (!r.rows) {
+    lrMsg = 'Nothing recorded yet: the first rows come when price reaches a level.';
+    return renderSettings();
+  }
+  const n = native();
+  if (n && n.shareLevelReport) {
+    if (!n.shareLevelReport(r.summary, r.header)) {
+      lrMsg = 'Could not prepare the report files.';
+      return renderSettings();
+    }
+  } else {
+    for (const [name, text] of [['xauusd-level-summary.csv', r.summary], ['xauusd-level-events.csv', r.events]]) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    }
+  }
+  lrMsg = `Report made from ${r.rows} rows.`;
+  renderSettings();
+}
+
 export function renderSettings() {
   if (!root || root.hidden) return;
   const s = store.settings;
@@ -204,6 +268,7 @@ export function renderSettings() {
   root.innerHTML = `
     ${alertsCard()}
     ${brokerCard()}
+    ${levelRecCard()}
     <div class="card">
       <div class="card-h"><h2>Timeframes</h2><span>zones, trend, multi-TF areas</span></div>
       ${ANALYSIS_TFS.map(
@@ -246,7 +311,7 @@ export function renderSettings() {
     </div>
 
     <div class="card">
-      <div class="card-h"><h2>About</h2><span>version 1.6.1</span></div>
+      <div class="card-h"><h2>About</h2><span>version 1.7.0</span></div>
       <p class="note">This app calculates support and resistance from price history. It does not give buy or sell signals and is not financial advice. Prices come from third-party feeds and can differ from your broker by a small amount.</p>
       <p class="note">Candles: Dukascopy (personal use) or Twelve Data. Live price: Swissquote public quotes. Charts: TradingView Lightweight Charts™ (Apache 2.0).</p>
     </div>`;
@@ -264,6 +329,12 @@ export function renderSettingsStatus() {
   if (stateEl && state !== lastAlertState) {
     lastAlertState = state;
     stateEl.innerHTML = state;
+  }
+  const lr = levelRecBlock();
+  const lrEl = root.querySelector('#lr-state');
+  if (lrEl && lr !== lastLevelRec) {
+    lastLevelRec = lr;
+    lrEl.innerHTML = lr;
   }
   const recent = alertRecentBlock();
   const recentEl = root.querySelector('#al-recent');
@@ -367,7 +438,23 @@ export function initSettings(el) {
       else if (a === 'mon-notif' && n) n.openNotificationSettings();
       else if (a === 'mon-channel' && n) n.openAlertChannelSettings();
       else if (a === 'mon-battery' && n) n.openBatterySettings();
-      else if (a === 'alerts-clear') {
+      else if (a === 'lr-csv') exportLevelReport();
+      else if (a === 'lr-clear') {
+        if (Date.now() < lrClearArmed) {
+          lrClearArmed = 0;
+          lrMsg = clearLevelRecord() ? 'Record deleted. A new one starts now.' : 'Could not delete the record.';
+        } else {
+          lrClearArmed = Date.now() + 5000;
+          lrMsg = 'This deletes every recorded level. Download the report first if you want to keep it.';
+          setTimeout(() => {
+            if (lrClearArmed && Date.now() >= lrClearArmed) {
+              lrClearArmed = 0;
+              renderSettings();
+            }
+          }, 5100);
+        }
+        renderSettings();
+      } else if (a === 'alerts-clear') {
         clearAlerts();
         renderSettingsStatus();
       } else if (a === 'test') runTest();

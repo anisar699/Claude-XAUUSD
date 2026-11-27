@@ -15,8 +15,9 @@ const KEEP = { M1: 1500, M5: 1500, M15: 1500, M30: 1500, H1: 3600, D1U: 2600 };
 const DEEP = new Set(['H1', 'D1U']);
 const SYNC_ORDER = ['M1', 'H1', 'D1U', 'M30', 'M15', 'M5'];
 // Feeds only needed while their own timeframe is switched on. M1, H1 and D1U
-// feed everything else (forming candles, H4, days, weeks, pivots).
-const OPTIONAL = { M5: 'M5', M15: 'M15', M30: 'M30' };
+// feed everything else (forming candles, H4, days, weeks, pivots); M15 is
+// always loaded as well, for the level record (data/levelrec.js).
+const OPTIONAL = { M5: 'M5', M30: 'M30' };
 
 export function feedsNeeded(tfs) {
   return SYNC_ORDER.filter((f) => !OPTIONAL[f] || tfs.includes(OPTIONAL[f]));

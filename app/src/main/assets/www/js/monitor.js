@@ -14,6 +14,7 @@ import { entryReached, planNumbers } from './core/planner.js';
 import { markHit, readHits, readPlans } from './data/trades.js';
 import { pushWidget } from './data/widget.js';
 import { appendAlerts } from './data/alertlog.js';
+import { recordLevels } from './data/levelrec.js';
 
 // Provided by MonitorService: status(text) updates the ongoing notification,
 // alert(title, body, key) posts an alert notification, heartbeat(state)
@@ -193,6 +194,8 @@ window.__monitorTick = () => {
   store.reloadSettings();
   store.tick();
   evaluate();
+  // The level record (data/levelrec.js), with no screen to keep smooth.
+  recordLevels(store, { budgetMs: 400 });
 };
 
 store.on((type) => {

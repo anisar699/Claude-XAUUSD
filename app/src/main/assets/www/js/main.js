@@ -9,6 +9,7 @@ import { initChart, onChartQuote, renderChart } from './ui/chart.js';
 import { initSettings, renderSettings, renderSettingsStatus } from './ui/settings.js';
 import { initTrades, planFromLevel, refreshTrades, renderTrades, setNavigator } from './ui/trades.js';
 import { pushWidget } from './data/widget.js';
+import { recordLevels } from './data/levelrec.js';
 
 const $ = (id) => document.getElementById(id);
 const views = {
@@ -148,6 +149,9 @@ store.on((type) => {
       else if (active === 'overview' || active === 'levels') refreshLists();
       pushWidget(store);
     }
+    // The level record: cheap unless a 15-minute candle closed; catching up
+    // after a long absence takes a step a second, never while a finger is down.
+    if (!touching) recordLevels(store, { budgetMs: 60 });
     return;
   }
   renderHeader();

@@ -122,3 +122,11 @@ export function sessionStats(seriesList, t) {
   const active = out.filter((s) => s.window && s.window.active).map((s) => s.name);
   return { sessions: out, active, overlap: active.length > 1 };
 }
+
+// Names of the sessions open at UTC time `t` (none: an empty list).
+export function sessionsAt(t) {
+  return SESSIONS.filter((s) => {
+    const w = latestWindow(s, t);
+    return w && w.active;
+  }).map((s) => s.name);
+}
